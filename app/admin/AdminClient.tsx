@@ -1,205 +1,199 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
-import { supabase } from "../lib/supabaseClient";
+import { useMemo, useState } from "react";
+import { createClient } from "@supabase/supabase-js";
 
+type Winner = {
+  rank: "正取" | "備取1" | "備取2";
+  name: string;
+  uid?: string;
+};
+
+type ResultItem = {
+  note?: string;
+  catId: number;
+  catName: string;
+  winners: Winner[];
+};
+
+const supabase = createClient(
+  process.env.NEXT_PUBLIC_SUPABASE_URL!,
+  process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
+  {
+    global: {
+      headers: {
+        // 你前面已經把 RLS update 綁這個 header 了
+        "x-admin-key": process.env.NEXT_PUBLIC_ADMIN_KEY!,
+      },
+    },
+  }
+);
+
+// 先用你目前 cats 表的資料：假設你有 cats(id, name, is_popular, active)
+// 如果欄位不同，跟我說一下你 cats 表欄位，我再幫你對齊。
 type CatRow = {
   id: number;
   name: string;
   is_popular: boolean;
-  sort_order: number;
   active: boolean;
 };
 
 export default function AdminClient() {
-  // ======= 管理密碼鎖（前端）=======
-  const [password, setPassword] = useState("");
-  const [authed, setAuthed] = useState(false);
-  const [authErr, setAuthErr] = useState("");
+  const [cats, setCats] = useState<CatRow[] | null>(null);
+  const [popularSelected, setPopularSelected] = useState<number | null>(null);
+  const [otherSelected, setOtherSelected] = useState<number[]>([]);
+  const [msg, setMsg] = useState<string>("");
 
-  async function checkPassword() {
-    const res = await fetch("/api/admin-auth", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ password }),
-    });
-    if (res.ok) {
-      setAuthed(true);
-      setAuthErr("");
-    } else {
-      setAuthErr("密碼錯誤");
-    }
+  async function loadCats() {
+    setMsg("");
+    const { data, error } = await supabase
+      .from("cats")
+      .select("id,name,is_popular,active")
+      .eq("active", true)
+      .order("id", { ascending: true });
+
+    if (error) return setMsg("讀取 cats 失敗：" + error.message);
+    setCats((data ?? []) as CatRow[]);
   }
 
-  // ======= cats 清單 + 選取 =======
-  const [cats, setCats] = useState<CatRow[]>([]);
-  const [selected, setSelected] = useState<number[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [err, setErr] = useState<string>("");
+  // 進頁面先抓一次 cats
+  useMemo(() => {
+    if (!cats) loadCats();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [cats]);
 
-  const popular = useMemo(() => cats.filter((c) => c.is_popular), [cats]);
-  const normal = useMemo(() => cats.filter((c) => !c.is_popular), [cats]);
+  const popularCats = (cats ?? []).filter((c) => c.is_popular);
+  const otherCats = (cats ?? []).filter((c) => !c.is_popular);
 
-  useEffect(() => {
-    (async () => {
-      setLoading(true);
-      setErr("");
-      const { data, error } = await supabase
-        .from("cats")
-        .select("id,name,is_popular,sort_order,active")
-        .eq("active", true)
-        .order("sort_order", { ascending: true });
+  const selectedCatIds = useMemo(() => {
+    const ids = new Set<number>();
+    if (popularSelected) ids.add(popularSelected);
+    for (const id of otherSelected) ids.add(id);
+    return Array.from(ids);
+  }, [popularSelected, otherSelected]);
 
-      if (error) setErr(error.message);
-      setCats(data ?? []);
-      setLoading(false);
-    })();
-  }, []);
+  async function pushPreview() {
+    setMsg("");
+    const ids = selectedCatIds;
+    if (ids.length === 0) return setMsg("請先選擇至少 1 隻貓");
 
-  function toggleCat(id: number) {
-    setSelected((prev) =>
+    const { error } = await supabase
+      .from("live_state")
+      .update({
+        phase: "preview",
+        selected_cat_ids: ids,
+        results: [] as any, // preview 階段先清空
+        updated_at: new Date().toISOString(),
+      })
+      .eq("id", 1);
+
+    if (error) return setMsg("預覽失敗：" + error.message);
+    setMsg("✅ 已推送預覽到 /display（尚未出結果）");
+  }
+
+  async function doDraw() {
+    setMsg("");
+    const ids = selectedCatIds;
+    if (ids.length === 0) return setMsg("請先選擇至少 1 隻貓");
+
+    // 目前你還沒放 applications 報名名單，所以先做「沒有報名 → winners 空」的結果
+    // 等你把報名資料放進 applications，我們再把這段替換成真的抽籤邏輯。
+    const resultItems: ResultItem[] = ids.map((id) => {
+      const catName =
+        (cats ?? []).find((c) => c.id === id)?.name ?? `貓${id}`;
+      return {
+        note: "目前無人報名",
+        catId: id,
+        catName,
+        winners: [],
+      };
+    });
+
+    const { error } = await supabase
+      .from("live_state")
+      .update({
+        phase: "draw",
+        selected_cat_ids: ids,
+        results: resultItems as any,
+        updated_at: new Date().toISOString(),
+      })
+      .eq("id", 1);
+
+    if (error) return setMsg("抽籤失敗：" + error.message);
+    setMsg("🎉 已產生本輪結果並推送到 /display");
+  }
+
+  function toggleOther(id: number) {
+    setOtherSelected((prev) =>
       prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]
     );
   }
-  function selectSingle(id: number) {
-    setSelected([id]);
-  }
 
-  // ======= 預覽 / 抽籤 =======
-  const [busy, setBusy] = useState(false);
-  const [msg, setMsg] = useState("");
-
-  async function preview() {
-    if (!password) return setMsg("請先輸入管理密碼");
-    if (selected.length === 0) return setMsg("請先選擇要抽的貓");
-    setBusy(true);
-    setMsg("");
-
-    const res = await fetch("/api/live/preview", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ password, selectedCatIds: selected }),
-    });
-
-    setBusy(false);
-    if (!res.ok) return setMsg("預覽失敗（請確認密碼與環境變數）");
-    setMsg("✅ 已推送到直播頁（預覽：未出結果）");
-  }
-
-  async function draw() {
-    if (!password) return setMsg("請先輸入管理密碼");
-    if (selected.length === 0) return setMsg("請先選擇要抽的貓");
-    setBusy(true);
-    setMsg("");
-
-    const res = await fetch("/api/live/draw", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ password, selectedCatIds: selected }),
-    });
-
-    setBusy(false);
-    if (!res.ok) return setMsg("抽籤失敗（可能是 service role key 未設定或資料不足）");
-    setMsg("🎉 抽籤完成，直播頁已更新結果");
-  }
-
-  // ======= 未登入畫面 =======
-  if (!authed) {
-    return (
-      <main className="min-h-screen flex items-center justify-center p-6">
-        <div className="w-full max-w-sm space-y-4">
-          <h1 className="text-2xl font-bold text-center">管理端登入</h1>
-
-          <input
-            type="password"
-            className="w-full border rounded px-4 py-3"
-            placeholder="請輸入管理密碼"
-            value={password}
-            onChange={(e) => setPassword(e.target.value)}
-          />
-
-          {authErr && <div className="text-red-600 text-sm text-center">{authErr}</div>}
-
-          <button
-            onClick={checkPassword}
-            className="w-full bg-black text-white py-3 rounded"
-          >
-            進入管理端
-          </button>
-        </div>
-      </main>
-    );
-  }
-
-  // ======= 登入後管理畫面 =======
   return (
-    <main className="p-6 space-y-6">
-      <h1 className="text-2xl font-bold">抽籤管理端（Supabase 抽籤版）</h1>
+    <main className="min-h-screen p-10">
+      <div className="max-w-5xl mx-auto space-y-8">
+        <h1 className="text-3xl font-bold">抽籤管理端（Supabase 抽籤版）</h1>
 
-      {loading && <div>讀取貓名單中…</div>}
-      {err && <div className="text-red-600">錯誤：{err}</div>}
+        {msg ? <div className="text-sm opacity-80">{msg}</div> : null}
 
-      {!loading && !err && (
-        <>
-          <section className="space-y-3">
-            <h2 className="text-lg font-semibold">人氣貓（單點指定）</h2>
-            <div className="flex flex-wrap gap-2">
-              {popular.map((c) => (
-                <button
-                  key={c.id}
-                  onClick={() => selectSingle(c.id)}
-                  className={`rounded px-3 py-2 border ${
-                    selected.length === 1 && selected[0] === c.id ? "bg-black text-white" : ""
-                  }`}
-                >
-                  {c.id}號 {c.name}
-                </button>
-              ))}
-            </div>
-          </section>
-
-          <section className="space-y-3">
-            <h2 className="text-lg font-semibold">其他貓（可複選）</h2>
-            <div className="flex flex-wrap gap-2">
-              {normal.map((c) => (
-                <button
-                  key={c.id}
-                  onClick={() => toggleCat(c.id)}
-                  className={`rounded px-3 py-2 border ${
-                    selected.includes(c.id) ? "bg-black text-white" : ""
-                  }`}
-                >
-                  {c.id}號 {c.name}
-                </button>
-              ))}
-            </div>
-          </section>
-
-          <section className="rounded border p-4 space-y-3">
-            <div className="font-semibold">目前選取：</div>
-            <div className="opacity-80">{selected.length ? selected.join(", ") : "尚未選取"}</div>
-
-            <div className="flex flex-wrap gap-2">
+        <section className="space-y-3">
+          <div className="text-xl font-semibold">人氣貓（單點指定）</div>
+          <div className="flex flex-wrap gap-3">
+            {popularCats.map((c) => (
               <button
-                onClick={preview}
-                disabled={busy}
-                className="rounded px-4 py-2 border"
+                key={c.id}
+                onClick={() => setPopularSelected(c.id)}
+                className={[
+                  "rounded-xl border px-4 py-3 text-lg",
+                  popularSelected === c.id ? "bg-black text-white" : "bg-white",
+                ].join(" ")}
               >
-                預覽（推到直播頁，未出結果）
+                {c.id}號 {c.name}
               </button>
-              <button
-                onClick={draw}
-                disabled={busy}
-                className="rounded px-4 py-2 bg-black text-white"
-              >
-                抽籤（產生正取/備取）
-              </button>
-            </div>
+            ))}
+          </div>
+        </section>
 
-            {msg && <div className="text-sm opacity-80">{msg}</div>}
-          </section>
-        </>
-      )}
+        <section className="space-y-3">
+          <div className="text-xl font-semibold">其他貓（可複選）</div>
+          <div className="flex flex-wrap gap-3">
+            {otherCats.map((c) => (
+              <button
+                key={c.id}
+                onClick={() => toggleOther(c.id)}
+                className={[
+                  "rounded-xl border px-4 py-3 text-lg",
+                  otherSelected.includes(c.id)
+                    ? "bg-black text-white"
+                    : "bg-white",
+                ].join(" ")}
+              >
+                {c.id}號 {c.name}
+              </button>
+            ))}
+          </div>
+        </section>
+
+        <section className="space-y-3">
+          <div className="text-xl font-semibold">
+            目前選取：{selectedCatIds.length ? selectedCatIds.join(", ") : "—"}
+          </div>
+          <div className="flex gap-3">
+            <button
+              onClick={pushPreview}
+              className="rounded-xl border px-5 py-3 text-lg bg-white"
+            >
+              預覽（推到直播頁，未出結果）
+            </button>
+            <button
+              onClick={doDraw}
+              className="rounded-xl border px-5 py-3 text-lg bg-black text-white"
+            >
+              抽籤（產生正取/備取）
+            </button>
+          </div>
+        </section>
+      </div>
     </main>
   );
 }
