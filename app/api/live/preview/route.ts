@@ -1,57 +1,65 @@
-// app/api/live/preview/route.ts
-export const runtime = "nodejs";
-export const dynamic = "force-dynamic";
-
 import { NextResponse } from "next/server";
 import { createClient } from "@supabase/supabase-js";
 
-function getSupabase() {
-  const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
-  const anon = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
+type LiveStateRow = {
+  id: number;
+  phase: string;
+  selected_cat_ids: number[];
+  results: any; // jsonb
+};
 
-  if (!url || !anon) {
-    throw new Error("Missing NEXT_PUBLIC_SUPABASE_URL or NEXT_PUBLIC_SUPABASE_ANON_KEY");
-  }
-  return createClient(url, anon, { auth: { persistSession: false } });
+function sbAdmin() {
+  const url = process.env.SUPABASE_URL!;
+  const key = process.env.SUPABASE_SERVICE_ROLE_KEY!;
+  return createClient(url, key, { auth: { persistSession: false } });
 }
 
 export async function POST(req: Request) {
   try {
-    const body = await req.json().catch(() => null);
-
-    const selectedCatIds: number[] = Array.isArray(body?.selectedCatIds)
-      ? body.selectedCatIds.map((x: any) => Number(x)).filter((n: any) => Number.isFinite(n))
+    const supabase = sbAdmin();
+    const body = await req.json();
+    const selectedCatIds: number[] = Array.isArray(body.selectedCatIds)
+      ? body.selectedCatIds.map((n: any) => Number(n)).filter((n: number) => Number.isFinite(n))
       : [];
 
-    // phase: preview（只顯示貓、尚未抽結果）
-    const supabase = getSupabase();
+    // 讀 cats 名稱（用來顯示）
+    const { data: cats, error: catErr } = await supabase
+      .from("cats")
+      .select("id,name")
+      .in("id", selectedCatIds);
+
+    if (catErr) throw catErr;
+
+    const catNameMap = new Map<number, string>();
+    (cats ?? []).forEach((c: any) => catNameMap.set(Number(c.id), c.name));
+
+    // preview results：顯示選到的貓，但 winners 先空
+    const results = selectedCatIds.map((catId) => ({
+      note: "尚未抽籤",
+      catId,
+      catName: catNameMap.get(catId) ?? `貓 ${String(catId).padStart(2, "0")}`,
+      winners: [],
+    }));
+
+    const payload: Partial<LiveStateRow> = {
+      phase: "preview",
+      selected_cat_ids: selectedCatIds,
+      results,
+    };
 
     const { error } = await supabase
       .from("live_state")
-      .update({
-        phase: "preview",
-        selected_cat_ids: selectedCatIds, // ⚠️ 這裡是 integer[]，所以用 JS array 就對了
-        results: {},                     // jsonb
-        updated_at: new Date().toISOString(),
-      })
+      .update(payload)
       .eq("id", 1);
 
-    if (error) {
-      return NextResponse.json(
-        { ok: false, error: error.message, details: error },
-        { status: 500 }
-      );
-    }
+    if (error) throw error;
 
-    return NextResponse.json({ ok: true, selectedCatIds }, { status: 200 });
+    return NextResponse.json({ ok: true });
   } catch (e: any) {
+    console.error(e);
     return NextResponse.json(
-      { ok: false, error: e?.message ?? "Unknown server error" },
+      { ok: false, error: e?.message ?? String(e) },
       { status: 500 }
     );
   }
-}
-
-export async function GET() {
-  return NextResponse.json({ ok: false, error: "Method Not Allowed" }, { status: 405 });
 }

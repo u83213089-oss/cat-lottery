@@ -1,134 +1,182 @@
 import { NextResponse } from "next/server";
-import { supabaseServer } from "@/app/lib/supabaseServer";
+import { createClient } from "@supabase/supabase-js";
 
-type Winner = { rank: "正取" | "備取1" | "備取2"; name: string; uid: string };
+type Applicant = {
+  id: string;
+  name?: string | null;
+  phone?: string | null;
+  township?: string | null;
+};
 
+function sbAdmin() {
+  const url = process.env.SUPABASE_URL!;
+  const key = process.env.SUPABASE_SERVICE_ROLE_KEY!;
+  return createClient(url, key, { auth: { persistSession: false } });
+}
+
+function maskPhone(phone?: string | null) {
+  if (!phone) return "";
+  const digits = String(phone).replace(/\D/g, "");
+  if (digits.length < 7) return String(phone);
+  // 0912****78
+  return digits.slice(0, 4) + "****" + digits.slice(-2);
+}
+
+function shuffle<T>(arr: T[]) {
+  const a = [...arr];
+  for (let i = a.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [a[i], a[j]] = [a[j], a[i]];
+  }
+  return a;
+}
+
+/**
+ * 重要假設（符合你目前表結構）：
+ * - applications: id(uuid), applicant_id(uuid), choices(int4[])
+ * - applicants: id(uuid), name(text), phone(text), township(text)
+ * - live_state: id(int4=1), phase(text), selected_cat_ids(int4[]), results(jsonb)
+ *
+ * 若你的欄位名不同，告訴我我幫你改成完全對得上。
+ */
 export async function POST(req: Request) {
-  const { password, selectedCatIds } = await req.json();
+  try {
+    const supabase = sbAdmin();
+    const body = await req.json();
+    const selectedCatIds: number[] = Array.isArray(body.selectedCatIds)
+      ? body.selectedCatIds.map((n: any) => Number(n)).filter((n: number) => Number.isFinite(n))
+      : [];
 
-  if (!process.env.ADMIN_PASSWORD) {
-    return new NextResponse("ADMIN_PASSWORD not set", { status: 500 });
-  }
-  if (password !== process.env.ADMIN_PASSWORD) {
-    return new NextResponse("Unauthorized", { status: 401 });
-  }
-
-  const supabase = supabaseServer();
-  const ids: number[] = Array.isArray(selectedCatIds) ? selectedCatIds : [];
-
-  // 取貓資料（用來顯示貓名）
-  const { data: cats, error: catsErr } = await supabase
-    .from("cats")
-    .select("id,name")
-    .in("id", ids);
-
-  if (catsErr) return NextResponse.json({ ok: false, error: catsErr.message }, { status: 500 });
-
-  const catNameMap = new Map<number, string>((cats ?? []).map((c: any) => [c.id, c.name]));
-
-  const results: Array<{ catId: number; catName: string; winners: Winner[]; note?: string }> = [];
-
-  // 逐隻貓抽（你也可以改成一次抽多隻同批）
-  for (const catId of ids) {
-    // 候選人：有選這隻貓，且尚未中過（wins 沒有 applicant_id）
-    // 這裡用兩段查，保持新手也看得懂、好 debug
-
-    // 1) 找所有報名這隻貓的 applicant_id
-    const { data: apps, error: appsErr } = await supabase
-      .from("applications")
-      .select("applicant_id, choices")
-      .contains("choices", [catId]);
-
-    if (appsErr) {
-      return NextResponse.json({ ok: false, error: appsErr.message }, { status: 500 });
+    if (selectedCatIds.length === 0) {
+      return NextResponse.json({ ok: false, error: "selectedCatIds is empty" }, { status: 400 });
     }
 
-    const applicantIds = (apps ?? []).map((a: any) => a.applicant_id);
+    // 讀 cats 名稱
+    const { data: cats, error: catErr } = await supabase
+      .from("cats")
+      .select("id,name")
+      .in("id", selectedCatIds);
 
-    if (applicantIds.length === 0) {
-      results.push({
-        catId,
-        catName: catNameMap.get(catId) ?? `貓${catId}`,
-        winners: [],
-        note: "目前無人報名",
-      });
-      continue;
-    }
+    if (catErr) throw catErr;
 
-    // 2) 排除已中籤者
-    const { data: already, error: alreadyErr } = await supabase
+    const catNameMap = new Map<number, string>();
+    (cats ?? []).forEach((c: any) => catNameMap.set(Number(c.id), c.name));
+
+    // 讀取「已中籤的人」：避免一人重複中籤
+    // 這裡我們用 wins 表（如果你還沒用 wins，也可以先建立；你現在左邊有 wins）
+    const { data: wins, error: winsErr } = await supabase
       .from("wins")
-      .select("applicant_id")
-      .in("applicant_id", applicantIds);
+      .select("applicant_id");
 
-    if (alreadyErr) {
-      return NextResponse.json({ ok: false, error: alreadyErr.message }, { status: 500 });
-    }
+    if (winsErr) throw winsErr;
 
-    const alreadySet = new Set((already ?? []).map((w: any) => w.applicant_id));
-    const remaining = applicantIds.filter((id) => !alreadySet.has(id));
+    const alreadyWon = new Set<string>((wins ?? []).map((w: any) => String(w.applicant_id)));
 
-    if (remaining.length === 0) {
-      results.push({
-        catId,
-        catName: catNameMap.get(catId) ?? `貓${catId}`,
-        winners: [],
-        note: "報名者皆已在其他貓中籤（依規則不得重複中籤）",
-      });
-      continue;
-    }
+    const results: any[] = [];
 
-    // 3) 隨機抽 3 人（正取/備取1/備取2）
-    // 先把 applicants 抓出來，再用 JS 洗牌（避免 SQL/權限卡住，新手最好維護）
-    const { data: people, error: pplErr } = await supabase
-      .from("applicants")
-      .select("id,name,uid")
-      .in("id", remaining);
+    for (const catId of selectedCatIds) {
+      // 找出選了這隻貓的 applications（choices contains catId）
+      const { data: apps, error: appErr } = await supabase
+        .from("applications")
+        .select("id, applicant_id")
+        .contains("choices", [catId]);
 
-    if (pplErr) {
-      return NextResponse.json({ ok: false, error: pplErr.message }, { status: 500 });
-    }
+      if (appErr) throw appErr;
 
-    const shuffled = [...(people ?? [])].sort(() => Math.random() - 0.5);
-    const picked = shuffled.slice(0, 3);
+      const applicantIds = (apps ?? [])
+        .map((a: any) => String(a.applicant_id))
+        .filter((id: string) => !!id)
+        .filter((id: string) => !alreadyWon.has(id)); // 排除已中籤者
 
-    // 4) 寫入 wins（鎖住「這些人已中籤」）
-    // rank: 0 正取, 1 備取1, 2 備取2
-    for (let i = 0; i < picked.length; i++) {
-      const p: any = picked[i];
-      const { error: insErr } = await supabase.from("wins").insert({
-        applicant_id: p.id,
-        cat_id: catId,
-        rank: i,
-      });
-      if (insErr) {
-        return NextResponse.json({ ok: false, error: insErr.message }, { status: 500 });
+      if (applicantIds.length === 0) {
+        results.push({
+          note: "目前無人報名",
+          catId,
+          catName: catNameMap.get(catId) ?? `貓 ${String(catId).padStart(2, "0")}`,
+          winners: [],
+        });
+        continue;
       }
+
+      // 取 applicant 詳細資料（姓名/電話/鄉鎮）
+      const { data: applicants, error: apErr } = await supabase
+        .from("applicants")
+        .select("id,name,phone,township")
+        .in("id", applicantIds);
+
+      if (apErr) throw apErr;
+
+      const map = new Map<string, Applicant>();
+      (applicants ?? []).forEach((p: any) => map.set(String(p.id), p));
+
+      // 隨機排序候選人
+      const pool = shuffle(applicantIds);
+
+      const pick = (idx: number) => {
+        const id = pool[idx];
+        const p = id ? map.get(id) : undefined;
+        return {
+          rank: idx === 0 ? "正取" : idx === 1 ? "備取1" : "備取2",
+          name: p?.name ?? "—",
+          phone: maskPhone(p?.phone),
+          township: p?.township ?? "",
+          applicantId: id ?? null, // 內部用，display 可不顯示
+        };
+      };
+
+      const w0 = pick(0);
+      const w1 = pick(1);
+      const w2 = pick(2);
+
+      // 把正取加入 alreadyWon，避免同一次抽多貓時重複中
+      if (w0.applicantId) alreadyWon.add(w0.applicantId);
+
+      // 寫入 wins（可讓你留痕、也可用來防重複中籤）
+      // 建議 wins 表至少有：cat_id(int4), applicant_id(uuid), rank(text)
+      const rowsToInsert = [w0, w1, w2]
+        .filter((w) => w.applicantId)
+        .map((w) => ({
+          cat_id: catId,
+          applicant_id: w.applicantId,
+          rank: w.rank,
+        }));
+
+      if (rowsToInsert.length > 0) {
+        const { error: insErr } = await supabase.from("wins").insert(rowsToInsert);
+        // 若你想允許重抽同一貓（會撞資料），這裡會報錯
+        // 先不 throw，避免影響直播；需要「可重抽」我再幫你改成 upsert/先刪後插
+        if (insErr) console.warn("wins insert warning:", insErr.message);
+      }
+
+      // 給 display 的 winners：不要 applicantId（避免個資擴散）
+      const winnersForDisplay = [w0, w1, w2].map(({ applicantId, ...rest }) => rest);
+
+      results.push({
+        note: "",
+        catId,
+        catName: catNameMap.get(catId) ?? `貓 ${String(catId).padStart(2, "0")}`,
+        winners: winnersForDisplay,
+      });
     }
 
-    const winners: Winner[] = [
-      { rank: "正取", name: picked[0]?.name ?? "-", uid: picked[0]?.uid ?? "-" },
-      { rank: "備取1", name: picked[1]?.name ?? "-", uid: picked[1]?.uid ?? "-" },
-      { rank: "備取2", name: picked[2]?.name ?? "-", uid: picked[2]?.uid ?? "-" },
-    ];
+    // 寫入 live_state
+    const { error: upErr } = await supabase
+      .from("live_state")
+      .update({
+        phase: "drawn",
+        selected_cat_ids: selectedCatIds,
+        results,
+      })
+      .eq("id", 1);
 
-    results.push({
-      catId,
-      catName: catNameMap.get(catId) ?? `貓${catId}`,
-      winners,
-    });
+    if (upErr) throw upErr;
+
+    return NextResponse.json({ ok: true, results });
+  } catch (e: any) {
+    console.error(e);
+    return NextResponse.json(
+      { ok: false, error: e?.message ?? String(e) },
+      { status: 500 }
+    );
   }
-
-  // 5) 寫入 live_state，讓 /display 即時更新
-  const payload = {
-    phase: "result",
-    selected_cat_ids: ids,
-    results,
-    updated_at: new Date().toISOString(),
-  };
-
-  const { error: liveErr } = await supabase.from("live_state").update(payload).eq("id", 1);
-  if (liveErr) return NextResponse.json({ ok: false, error: liveErr.message }, { status: 500 });
-
-  return NextResponse.json({ ok: true, results });
 }
