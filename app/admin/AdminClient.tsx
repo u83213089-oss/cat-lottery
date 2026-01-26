@@ -86,27 +86,40 @@ export default function AdminClient() {
   }
 
   async function pushPreview() {
-    setMsg("");
-    const ids = toIntArray(selectedCatIds);
-    if (ids.length === 0) return setMsg("請先選擇至少 1 隻貓");
+  setMsg("");
+  const ids = selectedCatIds;
+  if (ids.length === 0) return setMsg("請先選擇至少 1 隻貓");
 
-    const res = await fetch("/api/live/preview", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "x-admin-key": process.env.NEXT_PUBLIC_ADMIN_KEY!,
-      },
-      body: JSON.stringify({ selectedCatIds: ids }),
-    });
+  const placeholderWinners = [
+    { rank: "正取", name: "—", uid: "—" },
+    { rank: "備取1", name: "—", uid: "—" },
+    { rank: "備取2", name: "—", uid: "—" },
+  ] as const;
 
-    const json = await res.json().catch(() => ({}));
-    if (!res.ok) {
-      console.error("preview failed", res.status, json);
-      return setMsg(`預覽失敗：${res.status} ${json?.error ?? ""}`);
-    }
+  const previewItems = ids.map((id) => {
+    const catName = (cats ?? []).find((c) => c.id === id)?.name ?? `貓${id}`;
+    return {
+      note: "待抽籤（預覽）",
+      catId: id,
+      catName,
+      winners: placeholderWinners, // ✅ 這裡讓 /display 有東西可以畫
+    };
+  });
 
-    setMsg("✅ 已推送預覽到 /display（尚未出結果）");
-  }
+  const { error } = await supabase
+    .from("live_state")
+    .update({
+      phase: "preview",
+      selected_cat_ids: ids,
+      results: previewItems as any, // ✅ 不再是 []
+      updated_at: new Date().toISOString(),
+    })
+    .eq("id", 1);
+
+  if (error) return setMsg("預覽失敗：" + error.message);
+  setMsg("✅ 已推送預覽到 /display（尚未出結果）");
+}
+
 
   async function doDraw() {
     setMsg("");
