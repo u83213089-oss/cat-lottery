@@ -195,7 +195,7 @@ export default function DisplayPage() {
         {/* ✅ 主標題：純紅色 */}
         <header className="text-center">
           <div className="inline-flex items-center justify-center gap-6">
-            <h1 className="text-4xl font-black tracking-wide text-red-700">
+            <h1 className="text-5xl font-black tracking-wide text-red-700">
               喵星人命定配對活動
             </h1>
           </div>
