@@ -3,67 +3,116 @@ import { createClient } from "@supabase/supabase-js";
 
 export const runtime = "nodejs";
 
-function jsonError(status: number, error: string) {
-  return NextResponse.json({ ok: false, error }, { status });
+type Winner = {
+  rank: "正取" | "備取1" | "備取2";
+  name: string;
+  uid?: string;
+  phone?: string;
+  township?: string;
+};
+
+type ResultItem = {
+  catId: number;
+  catName: string;
+  catLabel?: string; // 想顯示 "3號貓咪" / "貓 03" 都可以從這裡控制
+  imageUrl?: string | null;
+  note?: string;
+  winners: Winner[];
+};
+
+function mustAdmin(req: Request) {
+  const key = req.headers.get("x-admin-key") ?? "";
+  const expected = process.env.ADMIN_KEY || process.env.NEXT_PUBLIC_ADMIN_KEY || "";
+  if (!expected || key !== expected) {
+    return NextResponse.json({ ok: false, error: "401 Unauthorized: bad admin key" }, { status: 401 });
+  }
+  return null;
 }
 
-function normalizeIds(input: any): number[] {
-  if (!Array.isArray(input)) return [];
-  return input
-    .map((x) => Number(x))
-    .filter((n) => Number.isInteger(n) && n > 0);
+function adminSupabase() {
+  const url = process.env.NEXT_PUBLIC_SUPABASE_URL!;
+  const service = process.env.SUPABASE_SERVICE_ROLE_KEY!;
+  return createClient(url, service, { auth: { persistSession: false } });
 }
 
 export async function POST(req: Request) {
-  // 1) Admin key check
-  const adminKey = req.headers.get("x-admin-key") ?? "";
-  const expected = process.env.NEXT_PUBLIC_ADMIN_KEY ?? "";
-  if (!expected || adminKey !== expected) {
-    return jsonError(401, "Unauthorized: bad admin key");
-  }
+  const authFail = mustAdmin(req);
+  if (authFail) return authFail;
 
-  // 2) Parse body
-  let body: any = null;
-  try {
-    body = await req.json();
-  } catch {
-    return jsonError(400, "Bad Request: invalid JSON");
-  }
+  const body = await req.json().catch(() => ({}));
+  const selectedCatIds: number[] = Array.isArray(body.selectedCatIds)
+    ? body.selectedCatIds.map((x: any) => Number(x)).filter((n: number) => Number.isFinite(n))
+    : [];
 
-  const selectedCatIds = normalizeIds(body?.selectedCatIds);
   if (selectedCatIds.length === 0) {
-    return jsonError(400, "selectedCatIds is required");
+    return NextResponse.json({ ok: false, error: "selectedCatIds is empty" }, { status: 400 });
   }
 
-  // 3) Supabase service role client (server only)
-  const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
-  const serviceKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
-  if (!url || !serviceKey) {
-    return jsonError(500, "Missing SUPABASE env vars on server");
+  const sb = adminSupabase();
+
+  // 讀 cats（有些環境可能還沒 image_url）
+  let catsData: any[] | null = null;
+  let catsErr: any = null;
+
+  const q1 = await sb
+    .from("cats")
+    .select("id,name,image_url")
+    .in("id", selectedCatIds);
+
+  catsData = q1.data as any;
+  catsErr = q1.error;
+
+  // fallback：沒有 image_url 欄位
+  if (catsErr && String(catsErr.message).includes("image_url")) {
+    const q2 = await sb
+      .from("cats")
+      .select("id,name")
+      .in("id", selectedCatIds);
+    catsData = q2.data as any;
+    catsErr = q2.error;
   }
 
-  const supabase = createClient(url, serviceKey, {
-    auth: { persistSession: false },
+  if (catsErr) {
+    return NextResponse.json({ ok: false, error: "讀取 cats 失敗：" + catsErr.message }, { status: 500 });
+  }
+
+  const byId = new Map<number, any>();
+  (catsData ?? []).forEach((c) => byId.set(Number(c.id), c));
+
+  // ✅ Preview：先把卡片推去 display，但 winners 先用 — 佔位
+  const results: ResultItem[] = selectedCatIds.map((catId) => {
+    const c = byId.get(catId);
+    const catName = c?.name ?? `貓${catId}`;
+    const imageUrl = c?.image_url ?? null;
+
+    return {
+      catId,
+      catName,
+      catLabel: `${String(catId).padStart(2, "0")}號貓咪`, // 你想改成 "3號貓" 也在這裡改
+      imageUrl,
+      note: "待抽籤（預覽）",
+      winners: [
+        { rank: "正取", name: "—" },
+        { rank: "備取1", name: "—" },
+        { rank: "備取2", name: "—" },
+      ],
+    };
   });
 
-  // 4) Update live_state row id=1
-  const { error } = await supabase
+  // 寫回 live_state (id=1)
+  const { error: upErr } = await sb
     .from("live_state")
     .update({
       phase: "preview",
-      selected_cat_ids: selectedCatIds, // int4[]
-      results: [], // jsonb
+      selected_cat_ids: selectedCatIds,
+      results,
       updated_at: new Date().toISOString(),
     })
     .eq("id", 1);
 
-  if (error) {
-    return jsonError(500, `Supabase update failed: ${error.message}`);
+  if (upErr) {
+    return NextResponse.json({ ok: false, error: "更新 live_state 失敗：" + upErr.message }, { status: 500 });
   }
 
-  return NextResponse.json({
-    ok: true,
-    phase: "preview",
-    selectedCatIds,
-  });
+  return NextResponse.json({ ok: true });
 }
