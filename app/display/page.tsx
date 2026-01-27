@@ -7,7 +7,7 @@ type Winner = {
   rank: "正取" | "備取1" | "備取2";
   name: string;
   phone?: string;
-  township?: string; // 鄉鎮/市
+  township?: string;
 };
 
 type ResultItem = {
@@ -20,8 +20,8 @@ type ResultItem = {
 type LiveStateRow = {
   id: number;
   phase: "preview" | "draw";
-  selected_cat_ids: number[]; // int4[]
-  results: any; // jsonb
+  selected_cat_ids: number[];
+  results: any;
   updated_at: string;
 };
 
@@ -35,10 +35,6 @@ const supabase = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL!,
   process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
 );
-
-function pad2(n: number) {
-  return String(n).padStart(2, "0");
-}
 
 function maskPhone(p?: string) {
   if (!p) return "";
@@ -59,7 +55,6 @@ export default function DisplayPage() {
   const [state, setState] = useState<LiveStateRow | null>(null);
   const [err, setErr] = useState<string>("");
 
-  // 讀 cats（拿 catName / image_url）
   useEffect(() => {
     (async () => {
       const { data, error } = await supabase
@@ -72,7 +67,6 @@ export default function DisplayPage() {
     })();
   }, []);
 
-  // 讀 live_state 初始
   useEffect(() => {
     (async () => {
       const { data, error } = await supabase
@@ -86,7 +80,6 @@ export default function DisplayPage() {
     })();
   }, []);
 
-  // Realtime 訂閱 live_state 更新
   useEffect(() => {
     const channel = supabase
       .channel("display-live_state")
@@ -117,29 +110,25 @@ export default function DisplayPage() {
     return m;
   }, [cats]);
 
-  // 產出要顯示的結果清單
   const displayItems: ResultItem[] = useMemo(() => {
     if (!state) return [];
 
-    // draw：直接用 results
     const raw = Array.isArray(state.results) ? state.results : [];
 
     if (state.phase === "draw" && raw.length > 0) {
       return raw.map((r: any) => {
         const catId = Number(r.catId);
-        const catName =
-          r.catName ?? catMap.get(catId)?.name ?? `貓${pad2(catId)}`;
+        const catName = r.catName ?? catMap.get(catId)?.name ?? `貓${catId}`;
         const winners: Winner[] = Array.isArray(r.winners) ? r.winners : [];
         return { note: r.note, catId, catName, winners };
       });
     }
 
-    // preview：用 selected_cat_ids 生成「尚未出結果」
     const ids = Array.isArray(state.selected_cat_ids) ? state.selected_cat_ids : [];
     return ids.map((id) => ({
       note: "尚未開獎",
       catId: id,
-      catName: catMap.get(id)?.name ?? `貓${pad2(id)}`,
+      catName: catMap.get(id)?.name ?? `貓${id}`,
       winners: [
         { rank: "正取", name: "—" },
         { rank: "備取1", name: "—" },
@@ -154,48 +143,59 @@ export default function DisplayPage() {
     <main
       className="min-h-screen w-full"
       style={{
+        // ✅ 米白底（你要的）
+        backgroundColor: "#f6f1e6",
+        // 如果你想要紙紋理就保留這行；沒有圖也不會壞（只是 network 404）
         backgroundImage: `url(/decor/bg-paper.png)`,
+        backgroundBlendMode: "multiply",
         backgroundSize: "cover",
         backgroundPosition: "center",
       }}
     >
-      {/* 裝飾層 */}
+      {/* ✅ 裝飾層：左右花、春聯、梅花+鞭炮放大移到左上 */}
       <div className="pointer-events-none fixed inset-0">
+        {/* 左右花（中間偏上） */}
         <img
-          src="/decor/fireworks.png"
-          className="absolute left-6 top-4 w-40 opacity-90"
+          src="/decor/flower1.png"
+          className="absolute left-0 top-1/2 -translate-y-1/2 w-[260px] opacity-95"
+          alt=""
+        />
+        <img
+          src="/decor/flower2.png"
+          className="absolute right-0 top-1/2 -translate-y-1/2 w-[260px] opacity-95"
+          alt=""
+        />
+
+        {/* 春聯（福）左右各一，放在標題旁 */}
+        <img
+          src="/decor/spring2.png"
+          className="absolute left-10 top-10 w-[90px] opacity-95"
+          alt=""
+        />
+        <img
+          src="/decor/spring2.png"
+          className="absolute right-10 top-10 w-[90px] opacity-95"
+          alt=""
+        />
+
+        {/* 左上：梅花 + 鞭炮（放大） */}
+        <img
+          src="/decor/plum.png"
+          className="absolute left-0 top-0 w-[360px] opacity-95"
           alt=""
         />
         <img
           src="/decor/firecracker.png"
-          className="absolute right-4 top-2 w-40 opacity-90"
-          alt=""
-        />
-        <img
-          src="/decor/spring.png"
-          className="absolute right-40 top-10 w-16 opacity-95"
-          alt=""
-        />
-        <img
-          src="/decor/plum.png"
-          className="absolute left-0 top-48 w-48 opacity-95"
+          className="absolute left-[260px] top-0 w-[240px] opacity-95"
           alt=""
         />
       </div>
 
       <div className="relative mx-auto max-w-5xl px-6 py-8">
-        {/* 大標題 */}
+        {/* ✅ 主標題：純紅色 */}
         <header className="text-center">
-          <div className="inline-block rounded-full border-4 border-black bg-white/80 px-8 py-3 shadow-sm">
-            <h1
-              className="text-4xl font-black tracking-wide"
-              style={{
-                color: "#d10000",
-                WebkitTextStroke: "4px #fff",
-                textShadow:
-                  "0 2px 0 #000, 2px 0 0 #000, -2px 0 0 #000, 0 -2px 0 #000",
-              }}
-            >
+          <div className="inline-flex items-center justify-center gap-6">
+            <h1 className="text-4xl font-black tracking-wide text-red-700">
               喵星人命定配對活動
             </h1>
           </div>
@@ -217,20 +217,11 @@ export default function DisplayPage() {
           {err ? <div className="mt-2 text-sm text-red-700">{err}</div> : null}
         </header>
 
-        {/* 上方白框（目前貓資訊） */}
-        <section className="mt-6 rounded-xl border bg-white/90 px-6 py-4 shadow-sm">
-          <div className="text-lg font-bold">
-            {displayItems[0]
-              ? `${displayItems[0].catId}號貓咪｜${displayItems[0].catName}`
-              : "尚未選擇貓咪"}
-          </div>
-          <div className="mt-1 text-sm opacity-80">
-            {state?.phase === "draw" ? "已開獎" : "尚未開獎（預覽）"}
-          </div>
-        </section>
+        {/* ✅ 你說的「貓咪黑白第一行」要刪掉：所以這整塊不再顯示 */}
+        {/* <section className="..."> ... </section> */}
 
         {/* 結果清單 */}
-        <section className="mt-6 space-y-5">
+        <section className="mt-8 space-y-6">
           {displayItems.map((item) => {
             const cat = catMap.get(item.catId);
             const title = `${item.catId}號貓咪｜${item.catName}`;
@@ -238,7 +229,7 @@ export default function DisplayPage() {
             return (
               <div
                 key={item.catId}
-                className="rounded-[28px] border-4 border-red-700 bg-white/95 px-6 py-5 shadow-sm"
+                className="rounded-[28px] border-4 border-red-700 bg-white/95 px-6 py-6 shadow-sm"
               >
                 <div className="flex gap-4">
                   {/* 貓照片（有就顯示，沒就略過） */}
@@ -254,7 +245,7 @@ export default function DisplayPage() {
 
                   <div className="min-w-0 flex-1">
                     <div className="flex flex-wrap items-end justify-between gap-3">
-                      <div className="text-xl font-black text-red-700">
+                      <div className="text-2xl font-black text-red-700">
                         {title}
                       </div>
                       {item.note ? (
@@ -262,13 +253,13 @@ export default function DisplayPage() {
                       ) : null}
                     </div>
 
-                    <div className="mt-3 space-y-2 text-xl leading-relaxed">
+                    <div className="mt-4 space-y-3 text-2xl leading-relaxed">
                       <RowLine
                         label="正　取"
                         winner={item.winners.find((w) => w.rank === "正取")}
                       />
 
-                      <div className="flex flex-col gap-2 md:flex-row md:gap-6">
+                      <div className="flex flex-col gap-3 md:flex-row md:gap-10">
                         <div className="flex-1">
                           <RowLine
                             label="備取1"
@@ -308,7 +299,7 @@ function RowLine({ label, winner }: { label: string; winner?: Winner }) {
 
   return (
     <div className="flex gap-3">
-      <div className="w-20 shrink-0 font-black">{label}：</div>
+      <div className="w-24 shrink-0 font-black">{label}：</div>
       <div className="font-semibold">{tail || "—"}</div>
     </div>
   );
