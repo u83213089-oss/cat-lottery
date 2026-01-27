@@ -172,7 +172,7 @@ export default function DisplayPage() {
         <img
           src="/decor/firecracker.png"
           alt=""
-          className="absolute left-1/2 top-[25px] translate-x-[480px] w-[300px] opacity-95"
+          className="absolute left-1/2 top-[25px] translate-x-[540px] w-[400px] opacity-95"
         />
 
         {/* 春：靠主標題右側（不要跟鞭炮重疊） */}
@@ -205,7 +205,7 @@ export default function DisplayPage() {
       <div className="relative mx-auto max-w-5xl px-6 py-8">
         {/* 主標題：純紅 */}
         <header className="text-center">
-          <h1 className="text-5xl font-black tracking-wide text-red-700">
+          <h1 className="text-6xl font-black tracking-wide text-red-700">
             喵星人命定配對活動
           </h1>
 
