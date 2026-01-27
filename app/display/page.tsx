@@ -172,7 +172,7 @@ export default function DisplayPage() {
         <img
           src="/decor/firecracker.png"
           alt=""
-          className="absolute left-1/2 top-[25px] translate-x-[540px] w-[400px] opacity-95"
+          className="absolute left-1/2 top-[-5px] translate-x-[540px] w-[400px] opacity-95"
         />
 
         {/* 春：靠主標題右側（不要跟鞭炮重疊） */}
