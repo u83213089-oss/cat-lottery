@@ -66,6 +66,7 @@ export default function DisplayPage() {
         .from("cats")
         .select("id,name,image_url")
         .order("id", { ascending: true });
+
       if (error) setErr("讀取 cats 失敗：" + error.message);
       else setCats((data ?? []) as CatRow[]);
     })();
@@ -120,16 +121,14 @@ export default function DisplayPage() {
   const displayItems: ResultItem[] = useMemo(() => {
     if (!state) return [];
 
-    // draw：直接用 results（你目前就是放這裡）
+    // draw：直接用 results
     const raw = Array.isArray(state.results) ? state.results : [];
 
     if (state.phase === "draw" && raw.length > 0) {
       return raw.map((r: any) => {
         const catId = Number(r.catId);
         const catName =
-          r.catName ??
-          catMap.get(catId)?.name ??
-          `貓${pad2(catId)}`;
+          r.catName ?? catMap.get(catId)?.name ?? `貓${pad2(catId)}`;
         const winners: Winner[] = Array.isArray(r.winners) ? r.winners : [];
         return { note: r.note, catId, catName, winners };
       });
@@ -138,7 +137,7 @@ export default function DisplayPage() {
     // preview：用 selected_cat_ids 生成「尚未出結果」
     const ids = Array.isArray(state.selected_cat_ids) ? state.selected_cat_ids : [];
     return ids.map((id) => ({
-      note: "目前無人報名 / 尚未開獎",
+      note: "尚未開獎",
       catId: id,
       catName: catMap.get(id)?.name ?? `貓${pad2(id)}`,
       winners: [
@@ -149,8 +148,7 @@ export default function DisplayPage() {
     }));
   }, [state, catMap]);
 
-  const phaseLabel =
-    state?.phase === "draw" ? "結果出爐" : "待抽籤（預覽）";
+  const phaseLabel = state?.phase === "draw" ? "結果出爐" : "待抽籤（預覽）";
 
   return (
     <main
@@ -213,24 +211,22 @@ export default function DisplayPage() {
             >
               狀態：{phaseLabel}
             </span>
-            <span className="opacity-80">
-              更新時間：{fmtTW(state?.updated_at)}
-            </span>
+            <span className="opacity-80">更新時間：{fmtTW(state?.updated_at)}</span>
           </div>
 
-          {err ? (
-            <div className="mt-2 text-sm text-red-700">{err}</div>
-          ) : null}
+          {err ? <div className="mt-2 text-sm text-red-700">{err}</div> : null}
         </header>
 
-        {/* 目前貓資訊框（你圖上那個白框） */}
+        {/* 上方白框（目前貓資訊） */}
         <section className="mt-6 rounded-xl border bg-white/90 px-6 py-4 shadow-sm">
           <div className="text-lg font-bold">
             {displayItems[0]
               ? `${displayItems[0].catId}號貓咪｜${displayItems[0].catName}`
               : "尚未選擇貓咪"}
           </div>
-          <div className="mt-1 text-sm opacity-80">目前無人報名</div>
+          <div className="mt-1 text-sm opacity-80">
+            {state?.phase === "draw" ? "已開獎" : "尚未開獎（預覽）"}
+          </div>
         </section>
 
         {/* 結果清單 */}
@@ -238,13 +234,14 @@ export default function DisplayPage() {
           {displayItems.map((item) => {
             const cat = catMap.get(item.catId);
             const title = `${item.catId}號貓咪｜${item.catName}`;
+
             return (
               <div
                 key={item.catId}
                 className="rounded-[28px] border-4 border-red-700 bg-white/95 px-6 py-5 shadow-sm"
               >
                 <div className="flex gap-4">
-                  {/* 可選：貓照片 */}
+                  {/* 貓照片（有就顯示，沒就略過） */}
                   {cat?.image_url ? (
                     <div className="hidden sm:block">
                       <img
@@ -266,12 +263,11 @@ export default function DisplayPage() {
                     </div>
 
                     <div className="mt-3 space-y-2 text-xl leading-relaxed">
-                      {/* 正取 */}
                       <RowLine
                         label="正　取"
                         winner={item.winners.find((w) => w.rank === "正取")}
                       />
-                      {/* 備取 1 & 2 同行 */}
+
                       <div className="flex flex-col gap-2 md:flex-row md:gap-6">
                         <div className="flex-1">
                           <RowLine
@@ -304,13 +300,7 @@ export default function DisplayPage() {
   );
 }
 
-function RowLine({
-  label,
-  winner,
-}: {
-  label: string;
-  winner?: Winner;
-}) {
+function RowLine({ label, winner }: { label: string; winner?: Winner }) {
   const name = winner?.name ?? "—";
   const township = winner?.township ? `${winner.township} ` : "";
   const phone = winner?.phone ? maskPhone(winner.phone) : "";
@@ -322,10 +312,4 @@ function RowLine({
       <div className="font-semibold">{tail || "—"}</div>
     </div>
   );
-}
-
-function maskPhone(p: string) {
-  const s = p.replace(/\s/g, "");
-  if (s.length <= 4) return s;
-  return s.slice(0, 4) + "****" + s.slice(-2);
 }
