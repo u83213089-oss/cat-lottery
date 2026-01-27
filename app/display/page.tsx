@@ -179,14 +179,14 @@ export default function DisplayPage() {
         <img
           src="/decor/spring.png"
           alt=""
-          className="absolute left-1/2 top-[26px] translate-x-[260px] w-[78px] opacity-95"
+          className="absolute left-1/2 top-[26px] translate-x-[300px] w-[78px] opacity-95"
         />
 
         {/* 福：靠主標題左側 */}
         <img
           src="/decor/spring2.png"
           alt=""
-          className="absolute left-1/2 top-[26px] translate-x-[-340px] w-[78px] opacity-95"
+          className="absolute left-1/2 top-[26px] translate-x-[-380px] w-[78px] opacity-95"
         />
 
         {/* 左右花：往下移，避免跟梅花重疊 */}
