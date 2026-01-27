@@ -152,43 +152,43 @@ export default function DisplayPage() {
         backgroundPosition: "center",
       }}
     >
-      {/* ✅ 裝飾層：左右花、春聯、梅花+鞭炮放大移到左上 */}
+      {/* ✅ 裝飾層（全部用 fixed + transform 控位置，避免互相打架） */}
       <div className="pointer-events-none fixed inset-0">
-        {/* 左右花（中間偏上） */}
+        {/* 左側梅花：更靠左、更大，故意讓邊界被裁切 */}
+        <img
+          src="/decor/plum.png"
+          className="absolute left-[-140px] top-[-40px] w-[520px] opacity-95"
+          alt=""
+        />
+          {/* 鞭炮：移到主標題右方，跟梅花同一高度（平行） */}
+         <img
+           src="/decor/firecracker.png"
+           alt=""
+           className="absolute left-1/2 top-[18px] translate-x-[360px] w-[240px] opacity-95"
+        />
+        {/* 春( spring.png )：靠主標題右側，但不要跟鞭炮重疊 */}
+        <img
+           src="/decor/spring.png"
+           alt=""
+           className="absolute left-1/2 top-[26px] translate-x-[260px] w-[78px] opacity-95"
+        />
+        {/* 福( spring2.png )：靠主標題左側 */}
+        <img
+          src="/decor/spring2.png"
+          alt=""
+          className="absolute left-1/2 top-[26px] translate-x-[-340px] w-[78px] opacity-95"
+        />
+        {/* flower 系列往下移，避免跟梅花重疊 */}
         <img
           src="/decor/flower1.png"
-          className="absolute left-0 top-1/2 -translate-y-1/2 w-[260px] opacity-95"
           alt=""
+          className="absolute left-0 top-[62%] -translate-y-1/2 w-[260px] opacity-95"
         />
         <img
           src="/decor/flower2.png"
-          className="absolute right-0 top-1/2 -translate-y-1/2 w-[260px] opacity-95"
           alt=""
-        />
-
-        {/* 春聯（福）左右各一，放在標題旁 */}
-        <img
-          src="/decor/spring2.png"
-          className="absolute left-10 top-10 w-[90px] opacity-95"
-          alt=""
-        />
-        <img
-          src="/decor/spring2.png"
-          className="absolute right-10 top-10 w-[90px] opacity-95"
-          alt=""
-        />
-
-        {/* 左上：梅花 + 鞭炮（放大） */}
-        <img
-          src="/decor/plum.png"
-          className="absolute left-0 top-0 w-[360px] opacity-95"
-          alt=""
-        />
-        <img
-          src="/decor/firecracker.png"
-          className="absolute left-[260px] top-0 w-[240px] opacity-95"
-          alt=""
-        />
+          className="absolute right-0 top-[62%] -translate-y-1/2 w-[260px] opacity-95"
+         />
       </div>
 
       <div className="relative mx-auto max-w-5xl px-6 py-8">
