@@ -164,7 +164,7 @@ export default function DisplayPage() {
          <img
            src="/decor/firecracker.png"
            alt=""
-           className="absolute left-1/2 top-[18px] translate-x-[360px] w-[240px] opacity-95"
+           className="absolute left-1/2 top-[25px] translate-x-[420px] w-[360px] opacity-95"
         />
         {/* 春( spring.png )：靠主標題右側，但不要跟鞭炮重疊 */}
         <img
@@ -182,12 +182,12 @@ export default function DisplayPage() {
         <img
           src="/decor/flower1.png"
           alt=""
-          className="absolute left-0 top-[62%] -translate-y-1/2 w-[260px] opacity-95"
+          className="absolute left-0 top-[70%] -translate-y-1/2 w-[260px] opacity-95"
         />
         <img
           src="/decor/flower2.png"
           alt=""
-          className="absolute right-0 top-[62%] -translate-y-1/2 w-[260px] opacity-95"
+          className="absolute right-0 top-[70%] -translate-y-1/2 w-[260px] opacity-95"
          />
       </div>
 
