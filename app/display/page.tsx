@@ -1,113 +1,72 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { createClient } from "@supabase/supabase-js";
+
+type LiveStateRow = {
+  id: number;
+  phase: "preview" | "draw";
+  selected_cat_ids: number[]; // int4[]
+  results: any; // jsonb
+  updated_at: string;
+};
+
+type CatRow = {
+  id: number;
+  name: string;
+  image_url: string | null;
+  active: boolean;
+  sort_order: number | null;
+};
+
+type Winner = {
+  rank: "正取" | "備取1" | "備取2";
+  name: string;
+};
+
+type ResultItem = {
+  note?: string;
+  catId: number;
+  catName: string;
+  winners: Winner[];
+};
 
 const supabase = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL!,
   process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
 );
 
-type LiveStateRow = {
-  id: number;
-  phase: "preview" | "draw" | string;
-  selected_cat_ids: number[] | null;
-  results: any; // jsonb
-  updated_at: string | null;
-};
-
-type CatRow = {
-  id: number;
-  name: string;
-  uid?: string | null; // 你現在貓名後面那串 (9000...) 如果不是 uid，下面會自動 fallback
-  code?: string | null; // 有些人叫 code / serial
-  image_url?: string | null;
-};
-
-type Winner = {
-  rank: "正取" | "備取1" | "備取2";
-  name?: string;
-  township?: string;
-  town?: string;
-  area?: string;
-};
-
-type ResultItem = {
-  catId: number;
-  catName: string;
-  catUid?: string;
-  imageUrl?: string;
-  winners: Winner[];
-};
-
-function toIntArray(x: any): number[] {
-  if (!x) return [];
-  if (Array.isArray(x)) return x.map((n) => Number(n)).filter((n) => Number.isFinite(n));
-  return [];
-}
-
-function formatTs(iso: string | null | undefined) {
+function fmtTime(iso?: string) {
   if (!iso) return "—";
   const d = new Date(iso);
-  if (Number.isNaN(d.getTime())) return "—";
   const pad = (n: number) => String(n).padStart(2, "0");
-  return `${d.getFullYear()}/${d.getMonth() + 1}/${d.getDate()} ${pad(d.getHours())}:${pad(
-    d.getMinutes()
-  )}:${pad(d.getSeconds())}`;
-}
-
-function pickTown(w?: any) {
-  if (!w) return "";
-  return (w.township || w.town || w.area || "") as string;
-}
-
-function formatWinner(w?: any) {
-  if (!w || !w.name) return "—";
-  const town = pickTown(w);
-  return town ? `${town}  ${w.name}` : `${w.name}`;
-}
-
-function phaseLabel(phase: string | null | undefined) {
-  if (!phase) return "讀取中";
-  if (phase === "draw") return "結果出爐";
-  if (phase === "preview") return "待抽籤（預覽）";
-  return phase;
-}
-
-function phaseColorClass(phase: string | null | undefined) {
-  if (!phase) return "bg-gray-600";
-  if (phase === "draw") return "bg-green-600";
-  if (phase === "preview") return "bg-yellow-500";
-  return "bg-gray-600";
+  return `${d.getFullYear()}/${pad(d.getMonth() + 1)}/${pad(d.getDate())} ${pad(
+    d.getHours()
+  )}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
 }
 
 export default function DisplayPage() {
-  const [cats, setCats] = useState<CatRow[]>([]);
   const [live, setLive] = useState<LiveStateRow | null>(null);
+  const [cats, setCats] = useState<CatRow[]>([]);
   const [err, setErr] = useState<string>("");
-  const [loading, setLoading] = useState<boolean>(true);
-
-  const subscribedRef = useRef(false);
 
   async function loadCats() {
-    setErr("");
-    // 你 cats 表確定有 image_url
+    // ✅ 這裡不要選 uid（你表裡沒有）
     const { data, error } = await supabase
       .from("cats")
-      .select("id,name,uid,code,image_url,active")
+      .select("id,name,image_url,active,sort_order")
       .eq("active", true)
+      .order("sort_order", { ascending: true })
       .order("id", { ascending: true });
 
     if (error) {
-      setErr("讀取 cats 失敗：" + error.message);
-      setCats([]);
+      setErr(`讀取 cats 失敗：${error.message}`);
       return;
     }
     setCats((data ?? []) as CatRow[]);
   }
 
   async function loadLive() {
-    setErr("");
     const { data, error } = await supabase
       .from("live_state")
       .select("id,phase,selected_cat_ids,results,updated_at")
@@ -115,326 +74,236 @@ export default function DisplayPage() {
       .single();
 
     if (error) {
-      setErr("讀取 live_state 失敗：" + error.message);
-      setLive(null);
+      setErr(`讀取 live_state 失敗：${error.message}`);
       return;
     }
     setLive(data as LiveStateRow);
   }
 
   useEffect(() => {
-    (async () => {
-      setLoading(true);
-      await Promise.all([loadCats(), loadLive()]);
-      setLoading(false);
-    })();
-  }, []);
+    setErr("");
+    loadCats();
+    loadLive();
 
-  useEffect(() => {
-    if (subscribedRef.current) return;
-    subscribedRef.current = true;
-
-    const channel = supabase
-      .channel("live_state_watch")
-      .on(
-        "postgres_changes",
-        { event: "*", schema: "public", table: "live_state", filter: "id=eq.1" },
-        async () => {
-          await loadLive();
-        }
-      )
-      .subscribe();
-
-    return () => {
-      supabase.removeChannel(channel);
-    };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    // 每 2 秒輪詢一次（你現在用這個最直覺）
+    const t = setInterval(() => {
+      loadLive();
+    }, 2000);
+    return () => clearInterval(t);
   }, []);
 
   const catMap = useMemo(() => {
     const m = new Map<number, CatRow>();
-    for (const c of cats) m.set(Number(c.id), c);
+    for (const c of cats) m.set(c.id, c);
     return m;
   }, [cats]);
 
-  const items: ResultItem[] = useMemo(() => {
-    if (!live) return [];
-    const selectedIds = toIntArray(live.selected_cat_ids).slice().sort((a, b) => a - b);
+  const selectedIds = useMemo(() => {
+    const ids = (live?.selected_cat_ids ?? []).map((x) => Number(x));
+    // 保證正序
+    return Array.from(new Set(ids)).sort((a, b) => a - b);
+  }, [live?.selected_cat_ids]);
 
-    // draw：results 是 array 就用它
-    if (live.phase === "draw" && Array.isArray(live.results)) {
-      return (live.results as any[])
-        .map((it) => {
-          const catId = Number(it.catId ?? it.cat_id ?? it.id);
-          const cat = catMap.get(catId);
+  const phaseText = live?.phase === "draw" ? "結果出爐" : "待抽籤（預覽）";
 
-          const catName = (it.catName ?? it.cat_name ?? cat?.name ?? `貓${catId}`) as string;
+  const results: ResultItem[] = useMemo(() => {
+    if (Array.isArray(live?.results)) return live!.results as ResultItem[];
 
-          const catUid =
-            (it.catUid ??
-              it.cat_uid ??
-              cat?.uid ??
-              cat?.code ??
-              "") as string;
-
-          const imageUrl =
-            (it.imageUrl ??
-              it.image_url ??
-              cat?.image_url ??
-              "") as string;
-
-          const winners = Array.isArray(it.winners) ? (it.winners as Winner[]) : [];
-          return { catId, catName, catUid, imageUrl, winners };
-        })
-        .sort((a, b) => a.catId - b.catId);
-    }
-
-    // preview：用 selected_cat_ids 產卡片（沒有結果 → winners 顯示 —）
-    return selectedIds.map((catId) => {
-      const cat = catMap.get(catId);
-      return {
-        catId,
-        catName: cat?.name ?? `貓${catId}`,
-        catUid: (cat?.uid ?? cat?.code ?? "") as string,
-        imageUrl: (cat?.image_url ?? "") as string,
-        winners: [{ rank: "正取" }, { rank: "備取1" }, { rank: "備取2" }],
-      };
-    });
-  }, [live, catMap]);
-
-  const bg = "#f6f1e6"; // 米白底（你要更黃/更白我再調）
-  const titleRed = "#c40000";
+    // preview 但 results 不是 array → 自動組一個空結果給 UI 顯示
+    return selectedIds.map((id) => ({
+      note: "尚未開獎",
+      catId: id,
+      catName: catMap.get(id)?.name ?? `貓${id}`,
+      winners: [],
+    }));
+  }, [live?.results, selectedIds, catMap]);
 
   return (
     <main
       className="min-h-screen"
       style={{
-        background: bg,
-        color: "#000", // 強制真黑，避免夜間模式影響
+        background: "#efe3cf", // 米白
       }}
     >
-      {/* 裝飾：全部走 /decor/ */}
-      <div className="pointer-events-none select-none" style={{ position: "fixed", inset: 0, zIndex: 1 }}>
-        {/* 左上：梅花（放大並往左上藏邊界） */}
-        <img
-          src="/decor/plum.png"
-          alt=""
-          style={{
-            position: "absolute",
-            left: -120,
-            top: -80,
-            width: 620,
-            opacity: 0.95,
-          }}
-        />
+      {/* 背景紙張（如果你有 bg-paper.png） */}
+      {/* <img src="/decor/bg-paper.png" alt="" className="fixed inset-0 w-full h-full object-cover opacity-20 pointer-events-none" /> */}
 
-        {/* 右上：鞭炮（跟標題同高度，右方） */}
-        <img
-          src="/decor/firecracker.png"
-          alt=""
-          style={{
-            position: "absolute",
-            right: -10,
-            top: 55,
-            width: 260,
-            opacity: 0.95,
-          }}
-        />
+      {/* 裝飾：全部用 public/decor */}
+      <img
+        src="/decor/plum.png"
+        alt=""
+        className="pointer-events-none select-none fixed left-0 top-0 w-[520px] -translate-x-[140px] -translate-y-[40px] opacity-95"
+      />
+      <img
+        src="/decor/firecracker.png"
+        alt=""
+        className="pointer-events-none select-none fixed right-0 top-[140px] w-[220px] -translate-x-[30px] opacity-95"
+      />
+      <img
+        src="/decor/flower1.png"
+        alt=""
+        className="pointer-events-none select-none fixed left-[40px] bottom-[80px] w-[220px] opacity-95"
+      />
+      <img
+        src="/decor/flower2.png"
+        alt=""
+        className="pointer-events-none select-none fixed right-[40px] bottom-[80px] w-[220px] opacity-95"
+      />
 
-        {/* 左下：flower1 往下移避免重疊 */}
-        <img
-          src="/decor/flower1.png"
-          alt=""
-          style={{
-            position: "absolute",
-            left: 30,
-            bottom: 10,
-            width: 280,
-            opacity: 0.95,
-          }}
-        />
+      <div className="max-w-5xl mx-auto px-6 py-10">
+        {/* 標題列 */}
+        <header className="relative text-center">
+          {/* 福 / 春 */}
+          <img
+            src="/decor/spring2.png"
+            alt=""
+            className="pointer-events-none select-none absolute left-1/2 top-0 -translate-x-[360px] w-[70px]"
+          />
+          <img
+            src="/decor/spring.png"
+            alt=""
+            className="pointer-events-none select-none absolute left-1/2 top-0 translate-x-[300px] w-[70px]"
+          />
 
-        {/* 右下：flower2 往下移 */}
-        <img
-          src="/decor/flower2.png"
-          alt=""
-          style={{
-            position: "absolute",
-            right: 30,
-            bottom: 20,
-            width: 280,
-            opacity: 0.95,
-          }}
-        />
-      </div>
+          <h1
+            className="font-black tracking-wide text-[56px] leading-tight"
+            style={{ color: "#c40000" }} // 純紅
+          >
+            喵星人命定活動
+          </h1>
 
-      <div className="relative mx-auto max-w-[1500px] px-10 py-8" style={{ zIndex: 2 }}>
-        {/* Header */}
-        <header className="text-center space-y-3">
-          <div className="flex items-center justify-center gap-4">
-            {/* 左：福 spring2 */}
-            <img src="/decor/spring2.png" alt="" className="h-[70px] w-auto" />
-            <h1
-              className="font-extrabold"
-              style={{
-                color: titleRed,
-                fontSize: 64,
-                lineHeight: 1.05,
-                letterSpacing: "0.02em",
-              }}
-            >
-              喵星人命定活動
-            </h1>
-            {/* 右：春 spring */}
-            <img src="/decor/spring.png" alt="" className="h-[70px] w-auto" />
-          </div>
-
-          <div className="flex items-center justify-center gap-4">
+          <div className="mt-4 flex items-center justify-center gap-4">
             <span
-              className={[
-                "inline-flex items-center rounded-full px-6 py-3 font-bold text-white",
-                phaseColorClass(live?.phase),
-              ].join(" ")}
-              style={{ fontSize: 22 }}
+              className="inline-flex items-center rounded-full px-5 py-2 text-[18px] font-bold"
+              style={{ background: "#f0b100", color: "#fff" }}
             >
-              狀態：{phaseLabel(live?.phase)}
+              狀態：{phaseText}
             </span>
 
-            <span style={{ fontSize: 22, fontWeight: 700, color: "#111" }}>
-              更新時間：{formatTs(live?.updated_at)}
-            </span>
-          </div>
-
-          {err ? (
             <div
-              className="mx-auto max-w-[980px] rounded-2xl border px-6 py-4 text-left"
-              style={{
-                borderColor: "#fca5a5",
-                background: "#fff",
-                color: "#b91c1c",
-                fontSize: 18,
-                fontWeight: 700,
-              }}
+              className="text-[18px] font-semibold"
+              style={{ color: "#000" }} // 真黑
             >
-              {err}
+              更新時間：{fmtTime(live?.updated_at)}
             </div>
-          ) : null}
+          </div>
         </header>
 
-        {/* Body */}
-        <section className="mt-12">
-          {loading ? (
-            <div className="text-center" style={{ fontSize: 26, fontWeight: 800, color: "#222" }}>
-              讀取中…
+        {/* 錯誤條 */}
+        {err ? (
+          <div className="mt-6 rounded-xl border border-red-200 bg-white/70 p-4 text-red-700 font-semibold">
+            {err}
+          </div>
+        ) : null}
+
+        {/* 主內容 */}
+        <section className="mt-10 space-y-8">
+          {selectedIds.length === 0 ? (
+            <div
+              className="rounded-2xl border bg-white/70 p-8 text-center text-xl font-bold"
+              style={{ color: "#000" }}
+            >
+              目前尚未推送任何貓咪到直播頁（請在 /admin 按「預覽」或「抽籤」）
             </div>
-          ) : items.length === 0 ? (
-            <div className="text-center" style={{ fontSize: 26, fontWeight: 800, color: "#222" }}>
-              目前沒有資料
-            </div>
-          ) : (
-            <div className="mx-auto w-full max-w-[1220px] space-y-12">
-              {items.map((item, idx) => {
-                const title = `${item.catId}號貓咪｜${item.catName}`;
-                const uid = item.catUid?.trim() ? item.catUid!.trim() : "";
-                const imgUrl = item.imageUrl?.trim() ? item.imageUrl!.trim() : "";
+          ) : null}
 
-                const w0 = item.winners?.find((w: any) => w.rank === "正取");
-                const w1 = item.winners?.find((w: any) => w.rank === "備取1");
-                const w2 = item.winners?.find((w: any) => w.rank === "備取2");
+          {results.map((item) => {
+            const cat = catMap.get(item.catId);
+            const title = `${item.catId}號貓咪｜${cat?.name ?? item.catName}`;
 
-                return (
-                  <section
-                    key={`${item.catId}-${idx}`}
-                    style={{
-                      border: "6px solid #b80000",
-                      borderRadius: 34,
-                      background: "#fff",
-                      padding: "44px 54px",
-                      boxShadow: "0 1px 0 rgba(0,0,0,0.06)",
-                    }}
-                  >
-                    <div
-                      style={{
-                        display: "grid",
-                        gridTemplateColumns: "1fr 340px",
-                        alignItems: "center",
-                        gap: 50,
-                      }}
-                    >
-                      {/* 左：文字（放大版，取消電話） */}
-                      <div style={{ color: "#000" }}>
-                        <div
-                          style={{
-                            fontSize: 44,
-                            fontWeight: 900,
-                            color: "#b80000",
-                            lineHeight: 1.2,
-                            marginBottom: 10,
-                          }}
-                        >
-                          {title}
-                        </div>
+            // winners 空就顯示 —
+            const getName = (rank: Winner["rank"]) => {
+              const w = (item.winners ?? []).find((x) => x.rank === rank);
+              return w?.name ? w.name : "—";
+            };
 
-                        {uid ? (
-                          <div style={{ fontSize: 30, fontWeight: 800, color: "#000", marginBottom: 18 }}>
-                            （{uid}）
-                          </div>
-                        ) : (
-                          <div style={{ height: 12 }} />
-                        )}
+            // ✅ 圖片來源：優先用 cats.image_url
+            // 若你某些還沒填 image_url，也可以用 bucket 規則 fallback
+            const imgSrc =
+              (cat?.image_url && cat.image_url.trim()) ||
+              `${process.env.NEXT_PUBLIC_SUPABASE_URL}/storage/v1/object/public/cat%20image/cat${item.catId}.png`;
 
-                        <div style={{ display: "grid", gap: 18, fontSize: 38, fontWeight: 900 }}>
-                          <div style={{ display: "flex", gap: 18 }}>
-                            <div style={{ minWidth: 120 }}>正 取：</div>
-                            <div style={{ fontWeight: 800 }}>{formatWinner(w0)}</div>
-                          </div>
-
-                          <div style={{ display: "flex", gap: 18 }}>
-                            <div style={{ minWidth: 120 }}>備取1：</div>
-                            <div style={{ fontWeight: 800 }}>{formatWinner(w1)}</div>
-                          </div>
-
-                          <div style={{ display: "flex", gap: 18 }}>
-                            <div style={{ minWidth: 120 }}>備取2：</div>
-                            <div style={{ fontWeight: 800 }}>{formatWinner(w2)}</div>
-                          </div>
-                        </div>
+            return (
+              <article
+                key={item.catId}
+                className="relative rounded-[28px] bg-white border-[5px]"
+                style={{
+                  borderColor: "#c40000",
+                  boxShadow: "0 8px 24px rgba(0,0,0,0.08)",
+                }}
+              >
+                <div className="p-10">
+                  {/* 上排：標題 + 圖片 */}
+                  <div className="flex items-start justify-between gap-10">
+                    <div className="min-w-0">
+                      <div
+                        className="text-[40px] font-black"
+                        style={{ color: "#c40000" }}
+                      >
+                        {title}
                       </div>
+                      {/* 你說：不需要每張卡的「未開獎」字，所以這裡不放 */}
+                    </div>
 
-                      {/* 右：圖片（每隻貓都有） */}
-                      <div style={{ display: "flex", justifyContent: "center" }}>
-                        <div
-                          style={{
-                            width: 300,
-                            height: 300,
-                            borderRadius: 18,
-                            overflow: "hidden",
-                            background: "#f0b24a", // 圖片載入前的底色（你截圖的橘色）
+                    {/* 圖片區塊（會跟卡片一起上下滑動，因為它在卡片內） */}
+                    <div className="shrink-0">
+                      <div
+                        className="overflow-hidden rounded-[18px]"
+                        style={{
+                          width: 280,
+                          height: 280,
+                          background: "#f2b24a",
+                        }}
+                      >
+                        <img
+                          src={imgSrc}
+                          alt={`cat${item.catId}`}
+                          className="w-full h-full object-cover"
+                          onError={(e) => {
+                            // 圖片壞掉就退回橘色底
+                            (e.currentTarget as HTMLImageElement).style.display =
+                              "none";
                           }}
-                        >
-                          {imgUrl ? (
-                            <img
-                              src={imgUrl}
-                              alt={title}
-                              style={{ width: "100%", height: "100%", objectFit: "cover", display: "block" }}
-                              loading="lazy"
-                              referrerPolicy="no-referrer"
-                              onError={(e) => {
-                                // 如果網址錯，至少不會破版：保留橘色底
-                                (e.currentTarget as HTMLImageElement).style.display = "none";
-                              }}
-                            />
-                          ) : null}
-                        </div>
+                        />
                       </div>
                     </div>
-                  </section>
-                );
-              })}
-            </div>
-          )}
+                  </div>
+
+                  {/* 下排：正備取 */}
+                  <div className="mt-8 grid grid-cols-2 gap-y-6">
+                    <div className="space-y-5">
+                      <Row label="正 取：" value={getName("正取")} />
+                      <Row label="備取1：" value={getName("備取1")} />
+                    </div>
+                    <div className="space-y-5">
+                      <Row label="備取2：" value={getName("備取2")} />
+                    </div>
+                  </div>
+                </div>
+              </article>
+            );
+          })}
         </section>
       </div>
     </main>
+  );
+}
+
+function Row({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="flex items-baseline gap-4">
+      <div
+        className="text-[30px] font-black whitespace-nowrap"
+        style={{ color: "#000" }} // ✅ 真黑，且不吃夜間模式
+      >
+        {label}
+      </div>
+      <div
+        className="text-[30px] font-black truncate"
+        style={{ color: "#000" }}
+      >
+        {value}
+      </div>
+    </div>
   );
 }
