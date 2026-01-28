@@ -270,7 +270,7 @@ export default function DisplayPage() {
                   </div>
 
                   {/* 下排：正備取 */}
-                  <div className="mt-2">
+                  <div className="mt-24">
                     <div className="grid grid-cols-2 gap-y-6">
                       <Row label="正 取：" value={getName("正取")} />
                       <Row label="備取1：" value={getName("備取1")} />
