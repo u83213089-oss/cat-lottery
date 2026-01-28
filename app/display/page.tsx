@@ -3,6 +3,12 @@
 import { useEffect, useMemo, useState } from "react";
 import { createClient } from "@supabase/supabase-js";
 
+/** ✅ 讓瀏覽器 Tab 名稱變成「喵星人命定活動」
+ *  注意：Next.js 的 metadata 通常建議放 server component
+ *  但你現在 page.tsx 是 client component，所以這個在某些版本不會生效。
+ *  ✅ 最穩的做法我放在下面「另外要改的 1 個檔案」。
+ */
+
 type LiveStateRow = {
   id: number;
   phase: "preview" | "draw";
@@ -51,7 +57,6 @@ export default function DisplayPage() {
   const [err, setErr] = useState<string>("");
 
   async function loadCats() {
-    // ✅ 這裡不要選 uid（你表裡沒有）
     const { data, error } = await supabase
       .from("cats")
       .select("id,name,image_url,active,sort_order")
@@ -85,10 +90,8 @@ export default function DisplayPage() {
     loadCats();
     loadLive();
 
-    // 每 2 秒輪詢一次（你現在用這個最直覺）
-    const t = setInterval(() => {
-      loadLive();
-    }, 2000);
+    // 每 2 秒輪詢 live_state
+    const t = setInterval(() => loadLive(), 2000);
     return () => clearInterval(t);
   }, []);
 
@@ -100,7 +103,6 @@ export default function DisplayPage() {
 
   const selectedIds = useMemo(() => {
     const ids = (live?.selected_cat_ids ?? []).map((x) => Number(x));
-    // 保證正序
     return Array.from(new Set(ids)).sort((a, b) => a - b);
   }, [live?.selected_cat_ids]);
 
@@ -109,7 +111,7 @@ export default function DisplayPage() {
   const results: ResultItem[] = useMemo(() => {
     if (Array.isArray(live?.results)) return live!.results as ResultItem[];
 
-    // preview 但 results 不是 array → 自動組一個空結果給 UI 顯示
+    // preview 且 results 還不是 array → 做空結果讓 UI 顯示卡片
     return selectedIds.map((id) => ({
       note: "尚未開獎",
       catId: id,
@@ -125,10 +127,7 @@ export default function DisplayPage() {
         background: "#efe3cf", // 米白
       }}
     >
-      {/* 背景紙張（如果你有 bg-paper.png） */}
-      {/* <img src="/decor/bg-paper.png" alt="" className="fixed inset-0 w-full h-full object-cover opacity-20 pointer-events-none" /> */}
-
-      {/* 裝飾：全部用 public/decor */}
+      {/* ✅ 裝飾圖：public/decor */}
       <img
         src="/decor/plum.png"
         alt=""
@@ -153,7 +152,6 @@ export default function DisplayPage() {
       <div className="max-w-5xl mx-auto px-6 py-10">
         {/* 標題列 */}
         <header className="relative text-center">
-          {/* 福 / 春 */}
           <img
             src="/decor/spring2.png"
             alt=""
@@ -167,7 +165,7 @@ export default function DisplayPage() {
 
           <h1
             className="font-black tracking-wide text-[56px] leading-tight"
-            style={{ color: "#c40000" }} // 純紅
+            style={{ color: "#c40000" }}
           >
             喵星人命定活動
           </h1>
@@ -180,10 +178,7 @@ export default function DisplayPage() {
               狀態：{phaseText}
             </span>
 
-            <div
-              className="text-[18px] font-semibold"
-              style={{ color: "#000" }} // 真黑
-            >
+            <div className="text-[18px] font-semibold" style={{ color: "#000" }}>
               更新時間：{fmtTime(live?.updated_at)}
             </div>
           </div>
@@ -209,6 +204,8 @@ export default function DisplayPage() {
 
           {results.map((item) => {
             const cat = catMap.get(item.catId);
+
+            // ✅ 顯示：1號貓咪｜英國短毛貓(....)
             const title = `${item.catId}號貓咪｜${cat?.name ?? item.catName}`;
 
             // winners 空就顯示 —
@@ -217,11 +214,8 @@ export default function DisplayPage() {
               return w?.name ? w.name : "—";
             };
 
-            // ✅ 圖片來源：優先用 cats.image_url
-            // 若你某些還沒填 image_url，也可以用 bucket 規則 fallback
-            const imgSrc =
-              (cat?.image_url && cat.image_url.trim()) ||
-              `${process.env.NEXT_PUBLIC_SUPABASE_URL}/storage/v1/object/public/cat%20image/cat${item.catId}.png`;
+            // ✅ 圖片來源：優先 cats.image_url（你表裡有）
+            const imgSrc = cat?.image_url?.trim() ? cat.image_url.trim() : "";
 
             return (
               <article
@@ -233,8 +227,11 @@ export default function DisplayPage() {
                 }}
               >
                 <div className="p-10">
-                  {/* 上排：標題 + 圖片 */}
-                  <div className="flex items-start justify-between gap-10">
+                  {/* ✅ 兩欄同列：左（標題+正備取） / 右（圖片）
+                      這樣正備取就不會被圖片高度推到很下面
+                  */}
+                  <div className="grid grid-cols-[1fr_auto] items-start gap-10">
+                    {/* 左欄 */}
                     <div className="min-w-0">
                       <div
                         className="text-[40px] font-black"
@@ -242,10 +239,16 @@ export default function DisplayPage() {
                       >
                         {title}
                       </div>
-                      {/* 你說：不需要每張卡的「未開獎」字，所以這裡不放 */}
+
+                      {/* ✅ 距離控制在這：要更近就 mt-4 / mt-2 */}
+                      <div className="mt-6 flex flex-col space-y-6">
+                        <Row label="正 取：" value={getName("正取")} />
+                        <Row label="備取1：" value={getName("備取1")} />
+                        <Row label="備取2：" value={getName("備取2")} />
+                      </div>
                     </div>
 
-                    {/* 圖片區塊（會跟卡片一起上下滑動，因為它在卡片內） */}
+                    {/* 右欄：圖片 */}
                     <div className="shrink-0">
                       <div
                         className="overflow-hidden rounded-[18px]"
@@ -255,26 +258,19 @@ export default function DisplayPage() {
                           background: "#f2b24a",
                         }}
                       >
-                        <img
-                          src={imgSrc}
-                          alt={`cat${item.catId}`}
-                          className="w-full h-full object-cover"
-                          onError={(e) => {
-                            // 圖片壞掉就退回橘色底
-                            (e.currentTarget as HTMLImageElement).style.display =
-                              "none";
-                          }}
-                        />
+                        {imgSrc ? (
+                          <img
+                            src={imgSrc}
+                            alt={`cat${item.catId}`}
+                            className="w-full h-full object-cover"
+                            onError={(e) => {
+                              // 壞掉就留底色（不顯示破圖 icon）
+                              (e.currentTarget as HTMLImageElement).style.display =
+                                "none";
+                            }}
+                          />
+                        ) : null}
                       </div>
-                    </div>
-                  </div>
-
-                  {/* 下排：正備取 */}
-                  <div className="mt-1">
-                    <div className="flex flex-col space-y-6">
-                      <Row label="正 取：" value={getName("正取")} />
-                      <Row label="備取1：" value={getName("備取1")} />
-                      <Row label="備取2：" value={getName("備取2")} />
                     </div>
                   </div>
                 </div>
@@ -292,14 +288,11 @@ function Row({ label, value }: { label: string; value: string }) {
     <div className="flex items-baseline gap-4">
       <div
         className="text-[30px] font-black whitespace-nowrap"
-        style={{ color: "#000" }} // ✅ 真黑，且不吃夜間模式
+        style={{ color: "#000" }} // ✅ 真黑
       >
         {label}
       </div>
-      <div
-        className="text-[30px] font-black truncate"
-        style={{ color: "#000" }}
-      >
+      <div className="text-[30px] font-black" style={{ color: "#000" }}>
         {value}
       </div>
     </div>
