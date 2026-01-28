@@ -270,7 +270,7 @@ export default function DisplayPage() {
                   </div>
 
                   {/* 下排：正備取 */}
-                  <div className="mt-6">
+                  <div className="mt-1">
                     <div className="flex flex-col space-y-6">
                       <Row label="正 取：" value={getName("正取")} />
                       <Row label="備取1：" value={getName("備取1")} />
