@@ -17,13 +17,19 @@ function pickN<T>(arr: T[], n: number) {
 
 export async function POST(req: Request) {
   try {
-    const adminKey = req.headers.get("x-admin-key");
-    if (!adminKey || adminKey !== process.env.ADMIN_PASSWORD) {
-      return NextResponse.json(
-        { error: "Unauthorized: bad admin key" },
-        { status: 401 }
-      );
-    }
+    const adminKey = req.headers.get("x-admin-key") ?? "";
+      const ok =
+        adminKey &&
+        (adminKey === process.env.ADMIN_PASSWORD ||
+        adminKey === process.env.NEXT_PUBLIC_ADMIN_KEY);
+
+if (!ok) {
+  return NextResponse.json(
+    { error: "Unauthorized: bad admin key" },
+    { status: 401 }
+  );
+}
+
 
     const supabase = createClient(
       process.env.NEXT_PUBLIC_SUPABASE_URL!,
