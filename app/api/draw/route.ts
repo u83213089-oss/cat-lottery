@@ -1,42 +1,40 @@
 import { NextResponse } from "next/server";
 import { createClient } from "@supabase/supabase-js";
 
-export const runtime = "nodejs";
+const SUPABASE_URL = process.env.NEXT_PUBLIC_SUPABASE_URL!;
+const SERVICE_ROLE = process.env.SUPABASE_SERVICE_ROLE_KEY!; // 一定要在 .env.local / Vercel 設定
+const ADMIN_KEY = process.env.ADMIN_KEY!; // 你自己設的後台密碼（跟 AdminClient 送出的 x-admin-key 對上）
 
-type WinnerRank = "正取" | "備取1" | "備取2";
+const supabase = createClient(SUPABASE_URL, SERVICE_ROLE);
 
-function pickN<T>(arr: T[], n: number) {
-  // Fisher-Yates shuffle then slice
-  const a = [...arr];
-  for (let i = a.length - 1; i > 0; i--) {
+type WinnerRow = {
+  cat_id: number;
+  rank: "正取" | "備取1" | "備取2";
+  applicant_id: string;
+};
+
+function uniqSorted(nums: number[]) {
+  return Array.from(new Set(nums)).sort((a, b) => a - b);
+}
+
+function pickRandom<T>(arr: T[], count: number) {
+  const copy = [...arr];
+  for (let i = copy.length - 1; i > 0; i--) {
     const j = Math.floor(Math.random() * (i + 1));
-    [a[i], a[j]] = [a[j], a[i]];
+    [copy[i], copy[j]] = [copy[j], copy[i]];
   }
-  return a.slice(0, n);
+  return copy.slice(0, count);
 }
 
 export async function POST(req: Request) {
   try {
-    const adminKey = req.headers.get("x-admin-key") ?? "";
-      const ok =
-        adminKey &&
-        (adminKey === process.env.ADMIN_PASSWORD ||
-        adminKey === process.env.NEXT_PUBLIC_ADMIN_KEY);
+    // 0) admin key
+    const key = req.headers.get("x-admin-key") || "";
+    if (!ADMIN_KEY || key !== ADMIN_KEY) {
+      return NextResponse.json({ error: "401 Unauthorized: bad admin key" }, { status: 401 });
+    }
 
-if (!ok) {
-  return NextResponse.json(
-    { error: "Unauthorized: bad admin key" },
-    { status: 401 }
-  );
-}
-
-
-    const supabase = createClient(
-      process.env.NEXT_PUBLIC_SUPABASE_URL!,
-      process.env.SUPABASE_SERVICE_ROLE_KEY! // ✅只放 server
-    );
-
-    // 1) 讀 live_state 這輪要抽哪些貓
+    // 1) 讀 live_state.selected_cat_ids
     const { data: live, error: liveErr } = await supabase
       .from("live_state")
       .select("id, selected_cat_ids")
@@ -45,77 +43,70 @@ if (!ok) {
 
     if (liveErr) throw new Error(liveErr.message);
 
-    const selectedIds: number[] = (live?.selected_cat_ids ?? [])
-      .map((x: any) => Number(x))
-      .filter((x: number) => Number.isFinite(x));
+    const selectedIds: number[] = uniqSorted((live?.selected_cat_ids ?? []).map((x: any) => Number(x)).filter(Number.isFinite));
 
     if (selectedIds.length === 0) {
       return NextResponse.json({ error: "沒有選貓，無法抽籤" }, { status: 400 });
     }
 
-    // 2) 讀 cats（拿名字/圖片）
+    // 2) 讀 cats（名字/圖片）
     const { data: cats, error: catsErr } = await supabase
       .from("cats")
       .select("id,name,image_url")
       .in("id", selectedIds);
 
     if (catsErr) throw new Error(catsErr.message);
-    const catMap = new Map<number, any>();
-    (cats ?? []).forEach((c) => catMap.set(c.id, c));
 
-    // 3) 讀 applications + applicants（要 township）
-    // applications: applicant_id, choices(int4[])
-    // applicants: id, name, township
+    const catMap = new Map<number, { name: string; image_url: string | null }>();
+    (cats ?? []).forEach((c: any) => catMap.set(Number(c.id), { name: c.name, image_url: c.image_url ?? null }));
+
+    // 3) 讀 applications（每個人選了哪些貓）
     const { data: apps, error: appsErr } = await supabase
       .from("applications")
-      .select("applicant_id, choices");
+      .select("id, applicant_id, choices")
+      .not("choices", "is", null);
 
     if (appsErr) throw new Error(appsErr.message);
 
-    const applicantIds = Array.from(
-      new Set((apps ?? []).map((x: any) => x.applicant_id))
-    );
+    // 4) 先抓出「每隻貓的候選人」
+    const candidatesByCat = new Map<number, string[]>();
+    for (const cid of selectedIds) candidatesByCat.set(cid, []);
 
-    const { data: people, error: peopleErr } = await supabase
-      .from("applicants")
-      .select("id,name,township")
-      .in("id", applicantIds);
+    for (const row of apps ?? []) {
+      const applicantId = row.applicant_id as string;
+      const choices = (row.choices ?? []) as number[];
+      for (const cid of choices) {
+        if (candidatesByCat.has(cid)) {
+          candidatesByCat.get(cid)!.push(applicantId);
+        }
+      }
+    }
 
-    if (peopleErr) throw new Error(peopleErr.message);
+    // 5) 用 wins_one_per_applicant 的規則：同一個人最多中一次
+    //    做法：抽的時候把已中者排除掉
+    const used = new Set<string>();
 
-    const peopleMap = new Map<string, { name: string; township: string | null }>();
-    (people ?? []).forEach((p: any) =>
-      peopleMap.set(p.id, { name: p.name, township: p.township ?? null })
-    );
-
-    // 4) 對每隻貓，找報名者（choices 包含 catId）
+    const ranks: WinnerRow["rank"][] = ["正取", "備取1", "備取2"];
     const winsToInsert: any[] = [];
     const resultItems: any[] = [];
 
-    for (const catId of selectedIds.sort((a, b) => a - b)) {
-      const candidates = (apps ?? [])
-        .filter((ap: any) => Array.isArray(ap.choices) && ap.choices.includes(catId))
-        .map((ap: any) => ap.applicant_id)
-        .filter((id: any) => peopleMap.has(id));
+    for (const catId of selectedIds) {
+      const pool = candidatesByCat.get(catId) ?? [];
+      const available = pool.filter((id) => !used.has(id));
 
-      const picked = pickN(candidates, 3);
+      const picked = pickRandom(available, 3);
+      picked.forEach((id) => used.add(id));
 
-      const ranks: WinnerRank[] = ["正取", "備取1", "備取2"];
-      const winners = picked.map((applicant_id: string, idx: number) => {
-        const person = peopleMap.get(applicant_id)!;
-        return {
-          rank: ranks[idx],
-          name: person.name,
-          township: person.township ?? "",
-          applicant_id,
-        };
-      });
+      const winners = picked.map((applicant_id, idx) => ({
+        rank: ranks[idx],
+        applicant_id,
+      }));
 
-      // 寫進 wins（如果你 wins 欄位不同，跟我說我再改）
-      winners.forEach((w: any) => {
+      // 寫入 wins 的 rows（先暫存）
+      winners.forEach((w) => {
         winsToInsert.push({
           cat_id: catId,
-          rank: w.rank,
+          rank: w.rank, // 這裡是文字：正取/備取1/備取2
           applicant_id: w.applicant_id,
         });
       });
@@ -124,23 +115,28 @@ if (!ok) {
         catId,
         catName: catMap.get(catId)?.name ?? `貓${catId}`,
         image_url: catMap.get(catId)?.image_url ?? null,
-        winners: winners.map((w: any) => ({
+        winners: winners.map((w) => ({
           rank: w.rank,
-          name: w.name,
-          township: w.township,
+          name: "", // display 用不到電話/姓名就先不塞，或你也可以在這裡 join applicants 後塞 name
         })),
       });
     }
 
-    // 5) 清掉舊 wins（可選）
-    // 如果你要每次抽籤都覆蓋同一輪，就先清掉這些貓的舊資料
-    await supabase.from("wins").delete().in("cat_id", selectedIds);
+    // 6) 先清掉本輪 selected cats 的舊 wins（避免 duplicate）
+    const { error: delErr } = await supabase
+      .from("wins")
+      .delete()
+      .in("cat_id", selectedIds);
 
-    // 6) 寫入 wins
-    const { error: insertErr } = await supabase.from("wins").insert(winsToInsert);
-    if (insertErr) throw new Error(insertErr.message);
+    if (delErr) throw new Error(delErr.message);
 
-    // 7) 更新 live_state（讓 display 顯示結果）
+    // 7) 寫入 wins
+    if (winsToInsert.length > 0) {
+      const { error: insErr } = await supabase.from("wins").insert(winsToInsert);
+      if (insErr) throw new Error(insErr.message);
+    }
+
+    // 8) 更新 live_state（讓 display 即時看到）
     const { error: upErr } = await supabase
       .from("live_state")
       .update({
@@ -152,7 +148,11 @@ if (!ok) {
 
     if (upErr) throw new Error(upErr.message);
 
-    return NextResponse.json({ ok: true, inserted: winsToInsert.length });
+    return NextResponse.json({
+      ok: true,
+      cats: selectedIds.length,
+      inserted: winsToInsert.length,
+    });
   } catch (e: any) {
     return NextResponse.json({ error: e?.message ?? "unknown" }, { status: 500 });
   }
