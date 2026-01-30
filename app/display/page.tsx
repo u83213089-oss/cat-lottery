@@ -28,6 +28,7 @@ type CatRow = {
 type Winner = {
   rank: "正取" | "備取1" | "備取2";
   name: string;
+  township?: string;
 };
 
 type ResultItem = {
@@ -211,8 +212,11 @@ export default function DisplayPage() {
             // winners 空就顯示 —
             const getName = (rank: Winner["rank"]) => {
               const w = (item.winners ?? []).find((x) => x.rank === rank);
-              return w?.name ? w.name : "—";
+              if (!w) return "—";
+              const t = (w.township ?? "").trim();
+              return t ? `${t} ${w.name}` : w.name;
             };
+
 
             // ✅ 圖片來源：優先 cats.image_url（你表裡有）
             const imgSrc = cat?.image_url?.trim() ? cat.image_url.trim() : "";

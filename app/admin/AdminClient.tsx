@@ -109,21 +109,20 @@ export default function AdminClient() {
     }
   }
 
-  async function doDraw() {
-    setMsg("");
-    if (selectedCatIds.length === 0) return setMsg("請先選擇至少 1 隻貓");
+async function doDraw() {
+  setMsg(""); 
+  const res = await fetch("/api/draw", {
+    method: "POST",
+    headers: {
+      "x-admin-key": process.env.NEXT_PUBLIC_ADMIN_KEY!, // 你前端那個
+    },
+  });
 
-    try {
-      const r = await fetchJson<ApiOk | ApiErr>("/api/live/draw", {
-        selectedCatIds,
-      });
-      if (!("ok" in r) || (r as any).ok !== true) throw new Error((r as any).error);
-      setMsg("🎉 已抽籤並推送結果到 /display");
-    } catch (e: any) {
-      setMsg("抽籤失敗：" + (e?.message ?? String(e)));
-    }
-  }
+  const json = await res.json().catch(() => ({}));
+  if (!res.ok) return setMsg(`抽籤失敗：${res.status} ${json?.error ?? ""}`);
 
+  setMsg("🎉 抽籤完成，已寫入 wins，並推送到 /display");
+}
   function clearSelection() {
     setPopularSelected(null);
     setOtherSelected([]);
