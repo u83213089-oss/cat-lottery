@@ -3,16 +3,10 @@
 import { useEffect, useMemo, useState } from "react";
 import { createClient } from "@supabase/supabase-js";
 
-/** ✅ 讓瀏覽器 Tab 名稱變成「喵星人命定活動」
- *  注意：Next.js 的 metadata 通常建議放 server component
- *  但你現在 page.tsx 是 client component，所以這個在某些版本不會生效。
- *  ✅ 最穩的做法我放在下面「另外要改的 1 個檔案」。
- */
-
 type LiveStateRow = {
   id: number;
   phase: "preview" | "draw";
-  selected_cat_ids: number[]; // int4[]
+  selected_cat_ids: number[];
   results: any; // jsonb
   updated_at: string;
 };
@@ -32,9 +26,7 @@ type Winner = {
 };
 
 type ResultItem = {
-  note?: string;
   catId: number;
-  catName: string;
   winners: Winner[];
 };
 
@@ -50,6 +42,12 @@ function fmtTime(iso?: string) {
   return `${d.getFullYear()}/${pad(d.getMonth() + 1)}/${pad(d.getDate())} ${pad(
     d.getHours()
   )}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
+}
+
+function formatWinnerText(w: Winner | undefined) {
+  if (!w?.name || w.name === "—") return "—";
+  const t = (w.township ?? "").trim();
+  return t ? `${w.name}（${t}）` : w.name;
 }
 
 export default function DisplayPage() {
@@ -90,8 +88,6 @@ export default function DisplayPage() {
     setErr("");
     loadCats();
     loadLive();
-
-    // 每 2 秒輪詢 live_state
     const t = setInterval(() => loadLive(), 2000);
     return () => clearInterval(t);
   }, []);
@@ -104,31 +100,25 @@ export default function DisplayPage() {
 
   const selectedIds = useMemo(() => {
     const ids = (live?.selected_cat_ids ?? []).map((x) => Number(x));
-    return Array.from(new Set(ids)).sort((a, b) => a - b);
+    return Array.from(new Set(ids)).filter(Number.isFinite).sort((a, b) => a - b);
   }, [live?.selected_cat_ids]);
 
   const phaseText = live?.phase === "draw" ? "結果出爐" : "待抽籤（預覽）";
 
   const results: ResultItem[] = useMemo(() => {
+    // draw 後 route.ts 會把 results 寫成 array
     if (Array.isArray(live?.results)) return live!.results as ResultItem[];
 
-    // preview 且 results 還不是 array → 做空結果讓 UI 顯示卡片
-    return selectedIds.map((id) => ({
-      note: "尚未開獎",
-      catId: id,
-      catName: catMap.get(id)?.name ?? `貓${id}`,
+    // 沒結果就做空白
+    return selectedIds.map((catId) => ({
+      catId,
       winners: [],
     }));
-  }, [live?.results, selectedIds, catMap]);
+  }, [live?.results, selectedIds]);
 
   return (
-    <main
-      className="min-h-screen"
-      style={{
-        background: "#efe3cf", // 米白
-      }}
-    >
-      {/* ✅ 裝飾圖：public/decor */}
+    <main className="min-h-screen" style={{ background: "#efe3cf" }}>
+      {/* 背景裝飾（固定在視窗，不跟卡片跑） */}
       <img
         src="/decor/plum.png"
         alt=""
@@ -137,7 +127,7 @@ export default function DisplayPage() {
       <img
         src="/decor/firecracker.png"
         alt=""
-        className="pointer-events-none select-none fixed right-0 top-[-45px] w-[520px] -translate-x-[30px] opacity-95"
+        className="pointer-events-none select-none fixed right-0 top-[140px] w-[220px] -translate-x-[30px] opacity-95"
       />
       <img
         src="/decor/flower1.png"
@@ -165,7 +155,7 @@ export default function DisplayPage() {
           />
 
           <h1
-            className="font-black tracking-wide text-[72px] leading-tight"
+            className="font-black tracking-wide text-[56px] leading-tight"
             style={{ color: "#c40000" }}
           >
             喵星人命定活動
@@ -185,14 +175,12 @@ export default function DisplayPage() {
           </div>
         </header>
 
-        {/* 錯誤條 */}
         {err ? (
           <div className="mt-6 rounded-xl border border-red-200 bg-white/70 p-4 text-red-700 font-semibold">
             {err}
           </div>
         ) : null}
 
-        {/* 主內容 */}
         <section className="mt-10 space-y-8">
           {selectedIds.length === 0 ? (
             <div
@@ -203,27 +191,22 @@ export default function DisplayPage() {
             </div>
           ) : null}
 
-          {results.map((item) => {
-            const cat = catMap.get(item.catId);
+          {selectedIds.map((catId) => {
+            const cat = catMap.get(catId);
+            const title = `${catId}號貓咪｜${cat?.name ?? `貓${catId}`}`;
 
-            // ✅ 顯示：1號貓咪｜英國短毛貓(....)
-            const title = `${item.catId}號貓咪｜${cat?.name ?? item.catName}`;
+            const r = results.find((x) => x.catId === catId);
+            const winners = r?.winners ?? [];
 
-            // winners 空就顯示 —
-            const getName = (rank: Winner["rank"]) => {
-              const w = (item.winners ?? []).find((x) => x.rank === rank);
-              if (!w) return "—";
-              const t = (w.township ?? "").trim();
-              return t ? `${t} ${w.name}` : w.name;
-            };
+            const w0 = winners.find((x) => x.rank === "正取");
+            const w1 = winners.find((x) => x.rank === "備取1");
+            const w2 = winners.find((x) => x.rank === "備取2");
 
-
-            // ✅ 圖片來源：優先 cats.image_url（你表裡有）
-            const imgSrc = cat?.image_url?.trim() ? cat.image_url.trim() : "";
+            const imgSrc = (cat?.image_url && cat.image_url.trim()) || "";
 
             return (
               <article
-                key={item.catId}
+                key={catId}
                 className="relative rounded-[28px] bg-white border-[5px]"
                 style={{
                   borderColor: "#c40000",
@@ -231,51 +214,38 @@ export default function DisplayPage() {
                 }}
               >
                 <div className="p-10">
-                  {/* ✅ 兩欄同列：左（標題+正備取） / 右（圖片）
-                      這樣正備取就不會被圖片高度推到很下面
-                  */}
-                  <div className="grid grid-cols-[1fr_auto] items-start gap-10">
-                    {/* 左欄 */}
+                  {/* 上排：標題 + 圖片 */}
+                  <div className="flex items-start justify-between gap-10">
                     <div className="min-w-0">
-                      <div
-                        className="text-[40px] font-black"
-                        style={{ color: "#c40000" }}
-                      >
+                      <div className="text-[40px] font-black" style={{ color: "#c40000" }}>
                         {title}
-                      </div>
-
-                      {/* ✅ 距離控制在這：要更近就 mt-4 / mt-2 */}
-                      <div className="mt-6 flex flex-col space-y-6">
-                        <Row label="正 取：" value={getName("正取")} />
-                        <Row label="備取1：" value={getName("備取1")} />
-                        <Row label="備取2：" value={getName("備取2")} />
                       </div>
                     </div>
 
-                    {/* 右欄：圖片 */}
                     <div className="shrink-0">
                       <div
                         className="overflow-hidden rounded-[18px]"
-                        style={{
-                          width: 280,
-                          height: 280,
-                          background: "#f2b24a",
-                        }}
+                        style={{ width: 280, height: 280, background: "#f2b24a" }}
                       >
                         {imgSrc ? (
                           <img
                             src={imgSrc}
-                            alt={`cat${item.catId}`}
+                            alt={`cat${catId}`}
                             className="w-full h-full object-cover"
                             onError={(e) => {
-                              // 壞掉就留底色（不顯示破圖 icon）
-                              (e.currentTarget as HTMLImageElement).style.display =
-                                "none";
+                              (e.currentTarget as HTMLImageElement).style.display = "none";
                             }}
                           />
                         ) : null}
                       </div>
                     </div>
+                  </div>
+
+                  {/* 下排：正備取（排一直線，不留空白） */}
+                  <div className="mt-6 flex flex-wrap gap-x-14 gap-y-6">
+                    <RowInline label="正 取：" value={formatWinnerText(w0)} />
+                    <RowInline label="備取1：" value={formatWinnerText(w1)} />
+                    <RowInline label="備取2：" value={formatWinnerText(w2)} />
                   </div>
                 </div>
               </article>
@@ -287,19 +257,15 @@ export default function DisplayPage() {
   );
 }
 
-function Row({ label, value }: { label: string; value: string }) {
+function RowInline({ label, value }: { label: string; value: string }) {
   return (
     <div className="flex items-baseline gap-4">
-      <div
-        className="text-[30px] font-black whitespace-nowrap"
-        style={{ color: "#000" }} // ✅ 真黑
-      >
+      <div className="text-[30px] font-black whitespace-nowrap" style={{ color: "#000" }}>
         {label}
       </div>
-      <div className="text-[30px] font-black" style={{ color: "#000" }}>
+      <div className="text-[30px] font-black whitespace-nowrap" style={{ color: "#000" }}>
         {value}
       </div>
     </div>
   );
 }
-//測試
