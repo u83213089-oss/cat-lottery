@@ -287,7 +287,7 @@ export default function DisplayPage() {
                   </div>
 
                   {/* 下排：正取/備取（垂直在左側一欄） */}
-                  <div className="mt-4">
+                  <div className="h-4">
                     <WinnerRow
                       label="正取"
                       winner={getW("正取")}
@@ -356,8 +356,9 @@ function WinnerRow({
             className="font-black opacity-80"
             style={{
               color: "#000",
-              fontSize: big ? 22 : 20,
-              marginTop: 6,
+              fontSize: big ? 38 : 34,
+              marginTop: 4,
+              lineHeight: 1.1
             }}
           >
             {township}
