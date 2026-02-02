@@ -36,7 +36,7 @@ export async function POST() {
   });
 
   try {
-    // 1) 只讀「目前 admin 選的貓」
+    // 1) 讀 live_state，只抽當下選的貓
     const { data: live, error: liveErr } = await supabase
       .from("live_state")
       .select("id, phase, selected_cat_ids")
@@ -58,29 +58,25 @@ export async function POST() {
       );
     }
 
-    // 2) 先抓「本輪開始前」已經中獎的人（全場去重依據）
-    //    注意：我們稍後會刪掉本輪 cats 的 wins，所以這裡要先讀出來
+    // 2) 讀「本輪開始前」已中獎的人（排除用，符合 wins_one_per_applicant）
+    //    注意：我們稍後會刪掉本輪 cats 的 wins，所以先讀出來
     const { data: oldWins, error: oldWinsErr } = await supabase
       .from("wins")
       .select("applicant_id, cat_id");
 
     if (oldWinsErr) throw new Error(oldWinsErr.message);
 
-    // usedApplicants 先放入「其他貓」已中獎的人
-    // 讓本輪抽籤絕對不會抽到已中獎的人（避免 wins_one_per_applicant）
     const usedApplicants = new Set<string>();
     for (const w of oldWins ?? []) {
       const catId = Number((w as any).cat_id);
       const applicantId = String((w as any).applicant_id);
       if (!applicantId) continue;
-      // ✅ 重抽本輪選到的貓：允許把這些貓舊 winners 清掉後再抽
-      // 所以只把「非本輪貓」的 winners 視為已用
-      if (!selectedCatIds.includes(catId)) {
-        usedApplicants.add(applicantId);
-      }
+
+      // ✅ 允許重抽本輪貓：本輪 cat 的舊 winners 不算已用
+      if (!selectedCatIds.includes(catId)) usedApplicants.add(applicantId);
     }
 
-    // 3) 只讀這次要抽的貓
+    // 3) 只讀本輪 cats
     const { data: cats, error: catsErr } = await supabase
       .from("cats")
       .select("id, name, image_url")
@@ -89,7 +85,7 @@ export async function POST() {
 
     if (catsErr) throw new Error(catsErr.message);
 
-    // 4) 允許重抽：先刪掉「本輪選到的貓」的 wins（不動其他貓）
+    // 4) 刪掉「本輪 cats」舊 wins（避免重抽撞 constraint）
     const { error: delErr } = await supabase
       .from("wins")
       .delete()
@@ -97,7 +93,7 @@ export async function POST() {
 
     if (delErr) throw new Error(delErr.message);
 
-    // 5) 對每隻貓抽：只抓 choices 包含 catId 的人，且排除 usedApplicants
+    // 5) 抽籤：只針對本輪 cats，並且全場去重
     const winsToInsert: { cat_id: number; applicant_id: string; rank: string }[] =
       [];
     const resultsForDisplay: any[] = [];
@@ -121,10 +117,8 @@ export async function POST() {
       const ranks = ["正取", "備取1", "備取2"] as const;
       const picked = pool.slice(0, 3);
 
-      // 全場去重：抽到就鎖定，後面貓不能再中
       picked.forEach((id) => usedApplicants.add(id));
 
-      // 寫 wins
       picked.forEach((id, idx) => {
         winsToInsert.push({
           cat_id: catId,
@@ -133,7 +127,7 @@ export async function POST() {
         });
       });
 
-      // display 用的 winners（含鄉鎮，電話你目前不顯示就不放）
+      // display winners
       let winners: any[] = [];
       if (picked.length > 0) {
         const { data: people, error: pplErr } = await supabase
@@ -164,19 +158,20 @@ export async function POST() {
       });
     }
 
-    // 6) 插入 wins（如果還是撞 constraint，代表資料庫裡還有舊 wins 沒被清掉或別處同時寫入）
+    // 6) insert wins
     if (winsToInsert.length > 0) {
       const { error: insErr } = await supabase.from("wins").insert(winsToInsert);
       if (insErr) throw new Error(insErr.message);
     }
 
-    // 7) 更新 live_state → display 立刻跟著變（不需按預覽）
+    // ✅✅✅ 7) 這裡是關鍵：live_state.results 一律覆蓋成「只包含本輪 selected 的貓」
+    // 這樣 display 不可能再殘留 1 號的結果
     const { error: upErr } = await supabase
       .from("live_state")
       .update({
         phase: "draw",
         selected_cat_ids: selectedCatIds,
-        results: resultsForDisplay,
+        results: resultsForDisplay, // ← 只放本輪
         updated_at: new Date().toISOString(),
       })
       .eq("id", 1);
@@ -185,9 +180,8 @@ export async function POST() {
 
     return NextResponse.json({
       ok: true,
-      drawnCats: selectedCatIds,
+      selectedCats: selectedCatIds,
       insertedWins: winsToInsert.length,
-      lockedWinnersTotal: usedApplicants.size,
     });
   } catch (e: any) {
     return NextResponse.json(
