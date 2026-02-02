@@ -26,7 +26,7 @@ export async function POST() {
 
   if (!supabaseUrl || !serviceKey) {
     return NextResponse.json(
-      { error: "Missing SUPABASE_URL or SERVICE_ROLE_KEY" },
+      { error: "Missing SUPABASE_URL or SUPABASE_SERVICE_ROLE_KEY" },
       { status: 500 }
     );
   }
@@ -36,9 +36,7 @@ export async function POST() {
   });
 
   try {
-    /* --------------------------------------------------
-     * 1️⃣ 只讀「目前 admin 選的貓」
-     * -------------------------------------------------- */
+    // 1) 只讀「目前 admin 選的貓」
     const { data: live, error: liveErr } = await supabase
       .from("live_state")
       .select("id, phase, selected_cat_ids")
@@ -49,7 +47,9 @@ export async function POST() {
 
     const selectedCatIds = Array.from(
       new Set((live as LiveState).selected_cat_ids.map(Number))
-    ).sort((a, b) => a - b);
+    )
+      .filter((x) => Number.isFinite(x))
+      .sort((a, b) => a - b);
 
     if (selectedCatIds.length === 0) {
       return NextResponse.json(
@@ -58,9 +58,29 @@ export async function POST() {
       );
     }
 
-    /* --------------------------------------------------
-     * 2️⃣ 只讀這次要抽的貓（不會碰到其他貓）
-     * -------------------------------------------------- */
+    // 2) 先抓「本輪開始前」已經中獎的人（全場去重依據）
+    //    注意：我們稍後會刪掉本輪 cats 的 wins，所以這裡要先讀出來
+    const { data: oldWins, error: oldWinsErr } = await supabase
+      .from("wins")
+      .select("applicant_id, cat_id");
+
+    if (oldWinsErr) throw new Error(oldWinsErr.message);
+
+    // usedApplicants 先放入「其他貓」已中獎的人
+    // 讓本輪抽籤絕對不會抽到已中獎的人（避免 wins_one_per_applicant）
+    const usedApplicants = new Set<string>();
+    for (const w of oldWins ?? []) {
+      const catId = Number((w as any).cat_id);
+      const applicantId = String((w as any).applicant_id);
+      if (!applicantId) continue;
+      // ✅ 重抽本輪選到的貓：允許把這些貓舊 winners 清掉後再抽
+      // 所以只把「非本輪貓」的 winners 視為已用
+      if (!selectedCatIds.includes(catId)) {
+        usedApplicants.add(applicantId);
+      }
+    }
+
+    // 3) 只讀這次要抽的貓
     const { data: cats, error: catsErr } = await supabase
       .from("cats")
       .select("id, name, image_url")
@@ -69,9 +89,7 @@ export async function POST() {
 
     if (catsErr) throw new Error(catsErr.message);
 
-    /* --------------------------------------------------
-     * 3️⃣ 只刪「這次要抽的貓」的舊 wins
-     * -------------------------------------------------- */
+    // 4) 允許重抽：先刪掉「本輪選到的貓」的 wins（不動其他貓）
     const { error: delErr } = await supabase
       .from("wins")
       .delete()
@@ -79,17 +97,14 @@ export async function POST() {
 
     if (delErr) throw new Error(delErr.message);
 
-    /* --------------------------------------------------
-     * 4️⃣ 抽籤（全場去重，符合 wins_one_per_applicant）
-     * -------------------------------------------------- */
-    const usedApplicants = new Set<string>();
-    const winsToInsert: any[] = [];
+    // 5) 對每隻貓抽：只抓 choices 包含 catId 的人，且排除 usedApplicants
+    const winsToInsert: { cat_id: number; applicant_id: string; rank: string }[] =
+      [];
     const resultsForDisplay: any[] = [];
 
     for (const cat of cats ?? []) {
-      const catId = Number(cat.id);
+      const catId = Number((cat as any).id);
 
-      // 只抓「有選這隻貓」的人
       const { data: apps, error: appErr } = await supabase
         .from("applications")
         .select("applicant_id")
@@ -97,16 +112,16 @@ export async function POST() {
 
       if (appErr) throw new Error(appErr.message);
 
-      // 候選池（去重、去掉已中過的人）
-      const pool = shuffle(
-        Array.from(
-          new Set((apps ?? []).map((r: any) => String(r.applicant_id)))
-        )
-      ).filter((id) => !usedApplicants.has(id));
+      const allCandidateIds = Array.from(
+        new Set((apps ?? []).map((r: any) => String(r.applicant_id)).filter(Boolean))
+      );
+
+      const pool = shuffle(allCandidateIds).filter((id) => !usedApplicants.has(id));
 
       const ranks = ["正取", "備取1", "備取2"] as const;
       const picked = pool.slice(0, 3);
 
+      // 全場去重：抽到就鎖定，後面貓不能再中
       picked.forEach((id) => usedApplicants.add(id));
 
       // 寫 wins
@@ -118,7 +133,7 @@ export async function POST() {
         });
       });
 
-      // 拿來給 display 用（姓名 / 鄉鎮）
+      // display 用的 winners（含鄉鎮，電話你目前不顯示就不放）
       let winners: any[] = [];
       if (picked.length > 0) {
         const { data: people, error: pplErr } = await supabase
@@ -129,7 +144,7 @@ export async function POST() {
         if (pplErr) throw new Error(pplErr.message);
 
         const map = new Map<string, any>();
-        for (const p of people ?? []) map.set(String(p.id), p);
+        for (const p of people ?? []) map.set(String((p as any).id), p);
 
         winners = picked.map((id, idx) => {
           const p = map.get(id);
@@ -143,25 +158,19 @@ export async function POST() {
 
       resultsForDisplay.push({
         catId,
-        catName: cat.name,
-        image_url: cat.image_url,
+        catName: (cat as any).name ?? `貓${catId}`,
+        image_url: (cat as any).image_url ?? null,
         winners,
       });
     }
 
-    /* --------------------------------------------------
-     * 5️⃣ 寫入 wins
-     * -------------------------------------------------- */
+    // 6) 插入 wins（如果還是撞 constraint，代表資料庫裡還有舊 wins 沒被清掉或別處同時寫入）
     if (winsToInsert.length > 0) {
-      const { error: insErr } = await supabase
-        .from("wins")
-        .insert(winsToInsert);
+      const { error: insErr } = await supabase.from("wins").insert(winsToInsert);
       if (insErr) throw new Error(insErr.message);
     }
 
-    /* --------------------------------------------------
-     * 6️⃣ 抽完立刻更新 live_state（display 直接變）
-     * -------------------------------------------------- */
+    // 7) 更新 live_state → display 立刻跟著變（不需按預覽）
     const { error: upErr } = await supabase
       .from("live_state")
       .update({
@@ -176,9 +185,9 @@ export async function POST() {
 
     return NextResponse.json({
       ok: true,
-      cats_drawn: selectedCatIds,
-      winners_count: winsToInsert.length,
-      unique_winners: usedApplicants.size,
+      drawnCats: selectedCatIds,
+      insertedWins: winsToInsert.length,
+      lockedWinnersTotal: usedApplicants.size,
     });
   } catch (e: any) {
     return NextResponse.json(
