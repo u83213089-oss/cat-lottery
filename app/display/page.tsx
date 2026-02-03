@@ -235,9 +235,9 @@ export default function DisplayPage() {
 
                       {/* 正備取：跟貓咪資訊在同一欄，避免空格 */}
                       <div className="mt-6 flex flex-col space-y-6">
-                        <Row label="正 取：" value={getName("正取")} />
-                        <Row label="備取1：" value={getName("備取1")} />
-                        <Row label="備取2：" value={getName("備取2")} />
+                        <Row label="正　取：" value={getName("正取")} />
+                        <Row label="備取１：" value={getName("備取1")} />
+                        <Row label="備取２：" value={getName("備取2")} />
                       </div>
                     </div>
 
