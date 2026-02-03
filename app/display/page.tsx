@@ -130,7 +130,7 @@ export default function DisplayPage() {
       <img
         src="/decor/firecracker.png"
         alt=""
-        className="pointer-events-none select-none fixed right-0 top-[140px] w-[220px] -translate-x-[30px] opacity-95"
+        className="pointer-events-none select-none fixed right-0 top-[-60px] w-[620px] -translate-x-[30px] opacity-95"
       />
       <img
         src="/decor/flower1.png"
