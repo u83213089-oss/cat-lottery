@@ -278,12 +278,12 @@ function Row({ label, value }: { label: string; value: string }) {
   return (
     <div className="flex items-baseline gap-4">
       <div
-        className="text-[30px] font-black whitespace-nowrap"
+        className="text-[36px] font-black whitespace-nowrap"
         style={{ color: "#000" }}
       >
         {label}
       </div>
-      <div className="text-[30px] font-black truncate" style={{ color: "#000" }}>
+      <div className="text-[36px] font-black truncate" style={{ color: "#000" }}>
         {value}
       </div>
     </div>
