@@ -244,10 +244,10 @@ export default function DisplayPage() {
                     {/* 右側：圖片 */}
                     <div className="shrink-0">
                       <div
-                        className="overflow-hidden rounded-[18px]"
+                        className="overflow-hidden rounded-[10px]"
                         style={{
-                          width: 320,
-                          height: 320,
+                          width: 400,
+                          height: 400,
                           background: "#f2b24a",
                         }}
                       >
