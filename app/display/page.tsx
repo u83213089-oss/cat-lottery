@@ -6,7 +6,7 @@ import { createClient } from "@supabase/supabase-js";
 type LiveStateRow = {
   id: number;
   phase: "preview" | "draw";
-  selected_cat_ids: number[];
+  selected_cat_ids: number[]; // int4[]
   results: any; // jsonb
   updated_at: string;
 };
@@ -22,7 +22,6 @@ type CatRow = {
 type Winner = {
   rank: "正取" | "備取1" | "備取2";
   name: string;
-  township?: string | null;
 };
 
 type ResultItem = {
@@ -99,13 +98,12 @@ export default function DisplayPage() {
 
   const selectedIds = useMemo(() => {
     const ids = (live?.selected_cat_ids ?? []).map((x) => Number(x));
-    return Array.from(new Set(ids)).filter(Number.isFinite).sort((a, b) => a - b);
+    return Array.from(new Set(ids)).sort((a, b) => a - b);
   }, [live?.selected_cat_ids]);
 
   const phaseText = live?.phase === "draw" ? "結果出爐" : "待抽籤（預覽）";
 
   const results: ResultItem[] = useMemo(() => {
-    // draw/preview 都以 live_state.results 為準（若不是 array 就 fallback）
     if (Array.isArray(live?.results)) return live!.results as ResultItem[];
 
     return selectedIds.map((id) => ({
@@ -117,7 +115,12 @@ export default function DisplayPage() {
   }, [live?.results, selectedIds, catMap]);
 
   return (
-    <main className="min-h-screen" style={{ background: "#efe3cf" }}>
+    <main
+      className="min-h-screen"
+      style={{
+        background: "#efe3cf",
+      }}
+    >
       {/* 裝飾：全部用 public/decor */}
       <img
         src="/decor/plum.png"
@@ -169,7 +172,10 @@ export default function DisplayPage() {
               狀態：{phaseText}
             </span>
 
-            <div className="text-[18px] font-semibold" style={{ color: "#000" }}>
+            <div
+              className="text-[18px] font-semibold"
+              style={{ color: "#000" }}
+            >
               更新時間：{fmtTime(live?.updated_at)}
             </div>
           </div>
@@ -197,17 +203,10 @@ export default function DisplayPage() {
             const cat = catMap.get(item.catId);
             const title = `${item.catId}號貓咪｜${cat?.name ?? item.catName}`;
 
-            const getWinner = (rank: Winner["rank"]) => {
+            const getName = (rank: Winner["rank"]) => {
               const w = (item.winners ?? []).find((x) => x.rank === rank);
-              return {
-                name: w?.name ?? "—",
-                township: w?.township ?? "",
-              };
+              return w?.name ? w.name : "—";
             };
-
-            const w1 = getWinner("正取");
-            const w2 = getWinner("備取1");
-            const w3 = getWinner("備取2");
 
             const imgSrc =
               (cat?.image_url && cat.image_url.trim()) ||
@@ -223,8 +222,9 @@ export default function DisplayPage() {
                 }}
               >
                 <div className="p-10">
-                  {/* 上排：標題 + 圖片 */}
-                  <div className="flex items-start justify-between gap-10">
+                  {/* ✅ 改這裡：同一排，左(貓咪資訊+正備取) 右(圖片) */}
+                  <div className="grid grid-cols-[1fr_auto] items-start gap-10">
+                    {/* 左側：貓咪資訊 + 正備取（綁在一起，不會被圖片高度撐開） */}
                     <div className="min-w-0">
                       <div
                         className="text-[40px] font-black"
@@ -232,9 +232,16 @@ export default function DisplayPage() {
                       >
                         {title}
                       </div>
+
+                      {/* 正備取：跟貓咪資訊在同一欄，避免空格 */}
+                      <div className="mt-6 flex flex-col space-y-6">
+                        <Row label="正 取：" value={getName("正取")} />
+                        <Row label="備取1：" value={getName("備取1")} />
+                        <Row label="備取2：" value={getName("備取2")} />
+                      </div>
                     </div>
 
-                    {/* 圖片 */}
+                    {/* 右側：圖片 */}
                     <div className="shrink-0">
                       <div
                         className="overflow-hidden rounded-[18px]"
@@ -256,15 +263,7 @@ export default function DisplayPage() {
                       </div>
                     </div>
                   </div>
-
-                  {/* ✅ 下排：正備取（重點：不要多餘空格，所以 mt-0 / -mt-1） */}
-                  <div className="-mt-1">
-                    <div className="flex flex-col space-y-6">
-                      <Row label="正取：" name={w1.name} township={w1.township} />
-                      <Row label="備取1：" name={w2.name} township={w2.township} />
-                      <Row label="備取2：" name={w3.name} township={w3.township} />
-                    </div>
-                  </div>
+                  {/* ✅ 改動結束：沒有下排了 */}
                 </div>
               </article>
             );
@@ -275,35 +274,17 @@ export default function DisplayPage() {
   );
 }
 
-function Row({
-  label,
-  name,
-  township,
-}: {
-  label: string;
-  name: string;
-  township?: string;
-}) {
+function Row({ label, value }: { label: string; value: string }) {
   return (
-    <div className="flex items-start gap-4">
+    <div className="flex items-baseline gap-4">
       <div
         className="text-[30px] font-black whitespace-nowrap"
         style={{ color: "#000" }}
       >
         {label}
       </div>
-
-      {/* ✅ 名字 + 鄉鎮：同字級（你要的一樣大） */}
-      <div className="flex flex-col leading-none">
-        <div className="text-[30px] font-black" style={{ color: "#000" }}>
-          {name}
-        </div>
-
-        {township ? (
-          <div className="text-[30px] font-black" style={{ color: "#000" }}>
-            {township}
-          </div>
-        ) : null}
+      <div className="text-[30px] font-black truncate" style={{ color: "#000" }}>
+        {value}
       </div>
     </div>
   );
