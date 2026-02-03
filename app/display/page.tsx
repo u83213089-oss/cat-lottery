@@ -246,8 +246,8 @@ export default function DisplayPage() {
                       <div
                         className="overflow-hidden rounded-[18px]"
                         style={{
-                          width: 280,
-                          height: 280,
+                          width: 320,
+                          height: 320,
                           background: "#f2b24a",
                         }}
                       >
