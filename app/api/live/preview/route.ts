@@ -86,7 +86,7 @@ export async function POST(req: Request) {
     // 2) cats 資訊（顯示用）— 你要用哪些欄位就選哪些
     const { data: cats, error: catsErr } = await supabase
       .from("cats")
-      .select("id,name,image_url,label")
+      .select("id,name,image_url")
       .in("id", selectedIds);
 
     if (catsErr) throw new Error(catsErr.message);
@@ -101,7 +101,6 @@ export async function POST(req: Request) {
         note: "尚未開獎",
         catId: id,
         catName: c?.name ?? `貓${id}`,
-        catLabel: c?.label ?? null,
         imageUrl: c?.image_url ?? null,
         winners: [],
       };
