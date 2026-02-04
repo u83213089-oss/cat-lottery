@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { createClient } from "@supabase/supabase-js";
 
-// 強制走 Node（避免 Edge runtime 拿不到 env 或行為不同）
+// 強制走 Node（避免 Edge runtime 拿不到 env）
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
@@ -27,7 +27,7 @@ function mustAdmin(req: Request) {
 }
 
 function getAdminSupabase() {
-  // ✅ 這邊全部用 server env（不要靠 NEXT_PUBLIC）
+  // ✅ server env 優先；NEXT_PUBLIC 只當 fallback（本機有時方便）
   const url = process.env.SUPABASE_URL || process.env.NEXT_PUBLIC_SUPABASE_URL;
   const service = process.env.SUPABASE_SERVICE_ROLE_KEY;
 
@@ -37,6 +37,16 @@ function getAdminSupabase() {
   return createClient(url, service, { auth: { persistSession: false } });
 }
 
+function normalizeIds(input: unknown): number[] {
+  const arr = Array.isArray(input) ? input : [];
+  const ids = arr
+    .map((x) => Number(x))
+    .filter((x): x is number => Number.isFinite(x));
+
+  // 去重 + 排序
+  return Array.from(new Set(ids)).sort((a, b) => a - b);
+}
+
 export async function POST(req: Request) {
   try {
     const guard = mustAdmin(req);
@@ -44,20 +54,27 @@ export async function POST(req: Request) {
 
     const supabase = getAdminSupabase();
 
-    // 1) 讀 live_state 的 selected_cat_ids
-    const { data: live, error: liveErr } = await supabase
-      .from("live_state")
-      .select("id, selected_cat_ids")
-      .eq("id", 1)
-      .single();
+    // 1) 先吃 body：{ selectedCatIds: number[] }
+    //    若沒 body / body 沒傳，就 fallback 用 DB 的 selected_cat_ids
+    let body: any = null;
+    try {
+      body = await req.json();
+    } catch {
+      body = null;
+    }
 
-    if (liveErr) throw new Error(liveErr.message);
+    let selectedIds = normalizeIds(body?.selectedCatIds);
 
-    const selectedIds: number[] = ((live?.selected_cat_ids ?? []) as unknown[])
-  .map((x) => Number(x))
-  .filter((x): x is number => Number.isFinite(x))
-  .sort((a: number, b: number) => a - b);
+    if (selectedIds.length === 0) {
+      const { data: live, error: liveErr } = await supabase
+        .from("live_state")
+        .select("id, selected_cat_ids")
+        .eq("id", 1)
+        .single();
 
+      if (liveErr) throw new Error(liveErr.message);
+      selectedIds = normalizeIds(live?.selected_cat_ids);
+    }
 
     if (selectedIds.length === 0) {
       return NextResponse.json(
@@ -66,30 +83,36 @@ export async function POST(req: Request) {
       );
     }
 
-    // 2) cats 名稱（顯示用）
+    // 2) cats 資訊（顯示用）— 你要用哪些欄位就選哪些
     const { data: cats, error: catsErr } = await supabase
       .from("cats")
-      .select("id,name")
+      .select("id,name,image_url,label")
       .in("id", selectedIds);
 
     if (catsErr) throw new Error(catsErr.message);
 
-    const nameMap: Record<number, string> = {};
-    for (const c of cats ?? []) nameMap[c.id] = c.name;
+    const catMap = new Map<number, any>();
+    for (const c of cats ?? []) catMap.set(c.id, c);
 
     // 3) 組 results（winner 先空）
-    const resultItems = selectedIds.map((id) => ({
-      note: "尚未開獎",
-      catId: id,
-      catName: nameMap[id] ?? `貓${id}`,
-      winners: [],
-    }));
+    const resultItems = selectedIds.map((id) => {
+      const c = catMap.get(id);
+      return {
+        note: "尚未開獎",
+        catId: id,
+        catName: c?.name ?? `貓${id}`,
+        catLabel: c?.label ?? null,
+        imageUrl: c?.image_url ?? null,
+        winners: [],
+      };
+    });
 
     // 4) 寫回 live_state（phase=preview）
     const { error: upErr } = await supabase
       .from("live_state")
       .update({
         phase: "preview",
+        selected_cat_ids: selectedIds, // ✅ 關鍵：把你選的也寫回 DB
         results: resultItems,
         updated_at: new Date().toISOString(),
       })
