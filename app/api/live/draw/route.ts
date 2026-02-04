@@ -20,9 +20,16 @@ type ResultItem = {
   winners: Winner[];
 };
 
+
 function mustAdmin(req: Request) {
+  const key = req.headers.get("x-admin-key") ?? "";
+  const expected = process.env.ADMIN_KEY || process.env.NEXT_PUBLIC_ADMIN_KEY || "";
+  if (!expected || key !== expected) {
+    return NextResponse.json({ ok: false, error: "401 Unauthorized: bad admin key" }, { status: 401 });
+  }
   return null;
 }
+
 
 function adminSupabase() {
   const url = process.env.NEXT_PUBLIC_SUPABASE_URL!;
