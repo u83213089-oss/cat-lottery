@@ -2,6 +2,8 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { createClient } from "@supabase/supabase-js";
+import { useRouter } from "next/navigation";
+
 
 type CatRow = {
   id: number;
@@ -38,6 +40,7 @@ async function fetchJson<T>(url: string, body?: any): Promise<T> {
 export default function AdminClient() {
   const [cats, setCats] = useState<CatRow[]>([]);
   const [msg, setMsg] = useState<string>("");
+  const router = useRouter();
 
   const [popularSelected, setPopularSelected] = useState<number | null>(null);
   const [otherSelected, setOtherSelected] = useState<number[]>([]);
@@ -112,6 +115,8 @@ export default function AdminClient() {
       if (!("ok" in r) || (r as any).ok !== true)
         throw new Error((r as any).error);
       setMsg("✅ 已推送預覽到 /display（尚未出結果）");
+      router.push("/display");
+      router.refresh();
     } catch (e: any) {
       setMsg("預覽失敗：" + (e?.message ?? String(e)));
     }
