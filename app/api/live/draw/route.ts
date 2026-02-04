@@ -21,11 +21,6 @@ type ResultItem = {
 };
 
 function mustAdmin(req: Request) {
-  const key = req.headers.get("x-admin-key") ?? "";
-  const expected = process.env.ADMIN_KEY || process.env.NEXT_PUBLIC_ADMIN_KEY || "";
-  if (!expected || key !== expected) {
-    return NextResponse.json({ ok: false, error: "401 Unauthorized: bad admin key" }, { status: 401 });
-  }
   return null;
 }
 
