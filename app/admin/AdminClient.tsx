@@ -100,27 +100,35 @@ export default function AdminClient() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  async function pushPreview() {
-    setMsg("");
-    if (selectedCatIds.length === 0) return setMsg("請先選擇至少 1 隻貓");
+async function pushPreview() {
+  setMsg("");
+  if (selectedCatIds.length === 0) return setMsg("請先選擇至少 1 隻貓");
 
-    if (!ADMIN_KEY) {
-      return setMsg("❌ 缺少 NEXT_PUBLIC_ADMIN_KEY（前端送不出 x-admin-key）");
-    }
+  try {
+    const res = await fetch("/api/live/preview", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "x-admin-key": process.env.NEXT_PUBLIC_ADMIN_KEY ?? "",
+      },
+      body: JSON.stringify({
+        selectedCatIds,              // camelCase
+        selected_cat_ids: selectedCatIds, // snake_case（保底）
+      }),
+    });
 
-    try {
-      // ✅ 重要：你現在的 preview route.ts 是「讀 DB 的 live_state.selected_cat_ids」
-      // 所以前端送 selectedCatIds 其實沒用，先不要送 body，避免你誤以為有生效。
-      const r = await fetchJson<ApiOk | ApiErr>("/api/live/preview");
-      if (!("ok" in r) || (r as any).ok !== true)
-        throw new Error((r as any).error);
-      setMsg("✅ 已推送預覽到 /display（尚未出結果）");
-      router.push("/display");
-      router.refresh();
-    } catch (e: any) {
-      setMsg("預覽失敗：" + (e?.message ?? String(e)));
-    }
+    const json = await res.json().catch(() => ({} as any));
+    if (!res.ok) throw new Error(json?.error ?? `HTTP ${res.status}`);
+
+    // ✅ 把 debug 一起顯示出來（你可以馬上看到後端收到什麼）
+    setMsg(
+      `✅ 已推送預覽到 /display（${json?.cats ?? "?"} 隻）\n` +
+      `debug.usedIds=${JSON.stringify(json?.debug?.usedIds ?? [])}`
+    );
+  } catch (e: any) {
+    setMsg("預覽失敗：" + (e?.message ?? String(e)));
   }
+}
 
   async function doDraw() {
     setMsg("");

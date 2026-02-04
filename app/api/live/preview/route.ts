@@ -36,60 +36,67 @@ function srv() {
   return createClient(url, service, { auth: { persistSession: false } });
 }
 
+function normalizeIds(input: any): number[] {
+  if (!Array.isArray(input)) return [];
+  return input
+    .map((x) => Number(x))
+    .filter((n) => Number.isFinite(n))
+    .sort((a, b) => a - b);
+}
+
 export async function POST(req: Request) {
   try {
     const guard = mustAdmin(req);
     if (guard) return guard;
 
-    const raw = await req.text(); // 先用 text 抓，避免 json() 解析失敗看不到原文
-    let body: any = {};
-    try {
-      body = raw ? JSON.parse(raw) : {};
-    } catch {
-      body = { __raw: raw };
+    const s = srv();
+
+    // 1) 先嘗試從 body 讀 ids（多 key 相容）
+    const body = await req.json().catch(() => ({}));
+
+    const fromBody =
+      normalizeIds(body?.selectedCatIds) ||
+      normalizeIds(body?.selected_cat_ids) ||
+      normalizeIds(body?.selectedCatids); // 有人會少打 I
+
+    let selectedCatIds = fromBody;
+
+    // 2) 如果 body 真的拿不到，就 fallback 用 live_state.selected_cat_ids（保底）
+    if (selectedCatIds.length === 0) {
+      const { data: live, error: liveErr } = await s
+        .from("live_state")
+        .select("id, selected_cat_ids")
+        .eq("id", 1)
+        .single();
+      if (liveErr) throw new Error(liveErr.message);
+
+      selectedCatIds = normalizeIds(live?.selected_cat_ids);
     }
 
-    // ✅ 同時支援多種 key，避免你前後端命名不一致
-    const arr =
-      body?.selectedCatIds ??
-      body?.selected_cat_ids ??
-      body?.selectedIds ??
-      [];
-
-    const selectedCatIds: number[] = Array.isArray(arr)
-      ? arr
-          .map((x: any) => Number(x))
-          .filter((n: number) => Number.isFinite(n))
-          .sort((a: number, b: number) => a - b)
-      : [];
-
-    // 🔥 Debug：直接回報 server 看到的 body
+    // 3) 還是空才真的回錯
     if (selectedCatIds.length === 0) {
       return NextResponse.json(
         {
           ok: false,
           error: "selectedCatIds is empty",
           debug: {
-            contentType: req.headers.get("content-type"),
-            raw,
-            body,
-            parsedSelectedCatIds: selectedCatIds,
+            receivedBody: body,
+            usedIds: selectedCatIds,
           },
         },
         { status: 400 }
       );
     }
 
-    const s = srv();
-
+    // cats 名稱顯示用
     const { data: cats, error: catsErr } = await s
       .from("cats")
       .select("id,name")
       .in("id", selectedCatIds);
-
     if (catsErr) throw new Error(catsErr.message);
 
-    const nameMap = Object.fromEntries((cats ?? []).map((c) => [c.id, c.name]));
+    const nameMap: Record<number, string> = {};
+    for (const c of cats ?? []) nameMap[c.id] = c.name;
 
     const results = selectedCatIds.map((id) => ({
       note: "尚未開獎",
@@ -98,6 +105,7 @@ export async function POST(req: Request) {
       winners: [],
     }));
 
+    // 一次寫回 live_state：selected_cat_ids + results
     const { data: updated, error: upErr } = await s
       .from("live_state")
       .update({
@@ -107,17 +115,20 @@ export async function POST(req: Request) {
         updated_at: new Date().toISOString(),
       })
       .eq("id", 1)
-      .select()
+      .select("updated_at, selected_cat_ids")
       .single();
 
     if (upErr) throw new Error(upErr.message);
 
     return NextResponse.json({
       ok: true,
-      received: selectedCatIds,
-      updated_at: updated.updated_at,
-      selected_cat_ids: updated.selected_cat_ids,
       cats: results.length,
+      selected_cat_ids: updated?.selected_cat_ids,
+      updated_at: updated?.updated_at,
+      debug: {
+        receivedBody: body,
+        usedIds: selectedCatIds,
+      },
     });
   } catch (e: any) {
     return NextResponse.json(
