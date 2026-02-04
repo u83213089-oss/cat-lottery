@@ -1,6 +1,10 @@
 import { NextResponse } from "next/server";
 import { createClient } from "@supabase/supabase-js";
 
+// 強制走 Node（避免 Edge runtime 拿不到 env 或行為不同）
+export const runtime = "nodejs";
+export const dynamic = "force-dynamic";
+
 function mustAdmin(req: Request) {
   const key = req.headers.get("x-admin-key") ?? "";
   const expected = process.env.ADMIN_KEY ?? "";
@@ -23,16 +27,14 @@ function mustAdmin(req: Request) {
 }
 
 function getAdminSupabase() {
-  const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
+  // ✅ 這邊全部用 server env（不要靠 NEXT_PUBLIC）
+  const url = process.env.SUPABASE_URL || process.env.NEXT_PUBLIC_SUPABASE_URL;
   const service = process.env.SUPABASE_SERVICE_ROLE_KEY;
 
-  if (!url || !service) {
-    throw new Error("Server missing SUPABASE_URL / SUPABASE_SERVICE_ROLE_KEY");
-  }
+  if (!url) throw new Error("Server missing SUPABASE_URL (or NEXT_PUBLIC_SUPABASE_URL)");
+  if (!service) throw new Error("Server missing SUPABASE_SERVICE_ROLE_KEY");
 
-  return createClient(url, service, {
-    auth: { persistSession: false },
-  });
+  return createClient(url, service, { auth: { persistSession: false } });
 }
 
 export async function POST(req: Request) {
@@ -42,7 +44,7 @@ export async function POST(req: Request) {
 
     const supabase = getAdminSupabase();
 
-    // 1) 讀 live_state 取 selected_cat_ids
+    // 1) 讀 live_state 的 selected_cat_ids
     const { data: live, error: liveErr } = await supabase
       .from("live_state")
       .select("id, selected_cat_ids")
@@ -51,10 +53,11 @@ export async function POST(req: Request) {
 
     if (liveErr) throw new Error(liveErr.message);
 
-    const selectedIds: number[] = (live?.selected_cat_ids ?? [])
-      .map((x: any) => Number(x))
-      .filter((x: number) => Number.isFinite(x))
-      .sort((a, b) => a - b);
+    const selectedIds: number[] = ((live?.selected_cat_ids ?? []) as unknown[])
+  .map((x) => Number(x))
+  .filter((x): x is number => Number.isFinite(x))
+  .sort((a: number, b: number) => a - b);
+
 
     if (selectedIds.length === 0) {
       return NextResponse.json(
@@ -71,14 +74,14 @@ export async function POST(req: Request) {
 
     if (catsErr) throw new Error(catsErr.message);
 
-    const catNameMap = new Map<number, string>();
-    for (const c of cats ?? []) catNameMap.set(c.id, c.name);
+    const nameMap: Record<number, string> = {};
+    for (const c of cats ?? []) nameMap[c.id] = c.name;
 
-    // 3) 組 preview 的 results（winner 先空）
+    // 3) 組 results（winner 先空）
     const resultItems = selectedIds.map((id) => ({
       note: "尚未開獎",
       catId: id,
-      catName: catNameMap.get(id) ?? `貓${id}`,
+      catName: nameMap[id] ?? `貓${id}`,
       winners: [],
     }));
 
