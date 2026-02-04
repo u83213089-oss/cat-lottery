@@ -14,20 +14,20 @@ type CatRow = {
 type ApiOk = { ok: true };
 type ApiErr = { ok: false; error: string };
 
-const supabase = createClient(
-  process.env.NEXT_PUBLIC_SUPABASE_URL!,
-  process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
-);
+const SUPABASE_URL = process.env.NEXT_PUBLIC_SUPABASE_URL ?? "";
+const SUPABASE_ANON = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY ?? "";
+const ADMIN_KEY = process.env.NEXT_PUBLIC_ADMIN_KEY ?? "";
 
-async function fetchJson<T>(url: string, body: any): Promise<T> {
+const supabase = createClient(SUPABASE_URL, SUPABASE_ANON);
+
+async function fetchJson<T>(url: string, body?: any): Promise<T> {
   const res = await fetch(url, {
     method: "POST",
     headers: {
       "content-type": "application/json",
-      // 這個 key 會用來通過你的 API / RLS header 驗證
-      "x-admin-key": process.env.NEXT_PUBLIC_ADMIN_KEY ?? "",
+      "x-admin-key": ADMIN_KEY,
     },
-    body: JSON.stringify(body),
+    body: body === undefined ? undefined : JSON.stringify(body),
   });
 
   const json = (await res.json().catch(() => ({}))) as any;
@@ -39,7 +39,6 @@ export default function AdminClient() {
   const [cats, setCats] = useState<CatRow[]>([]);
   const [msg, setMsg] = useState<string>("");
 
-  // 人氣：單選；其他：複選
   const [popularSelected, setPopularSelected] = useState<number | null>(null);
   const [otherSelected, setOtherSelected] = useState<number[]>([]);
 
@@ -62,14 +61,18 @@ export default function AdminClient() {
   async function loadCats() {
     setMsg("");
 
-    // 先嘗試讀 image_url（你若還沒加欄位，這裡會報錯）
+    if (!SUPABASE_URL || !SUPABASE_ANON) {
+      setMsg("❌ 缺少 NEXT_PUBLIC_SUPABASE_URL / NEXT_PUBLIC_SUPABASE_ANON_KEY");
+      setCats([]);
+      return;
+    }
+
     let { data, error } = await supabase
       .from("cats")
       .select("id,name,is_popular,active,image_url")
       .eq("active", true)
       .order("id", { ascending: true });
 
-    // fallback：沒有 image_url 欄位就改用舊欄位
     if (error && String(error.message).includes("image_url")) {
       const retry = await supabase
         .from("cats")
@@ -98,31 +101,42 @@ export default function AdminClient() {
     setMsg("");
     if (selectedCatIds.length === 0) return setMsg("請先選擇至少 1 隻貓");
 
+    if (!ADMIN_KEY) {
+      return setMsg("❌ 缺少 NEXT_PUBLIC_ADMIN_KEY（前端送不出 x-admin-key）");
+    }
+
     try {
-      const r = await fetchJson<ApiOk | ApiErr>("/api/live/preview", {
-        selectedCatIds,
-      });
-      if (!("ok" in r) || (r as any).ok !== true) throw new Error((r as any).error);
+      // ✅ 重要：你現在的 preview route.ts 是「讀 DB 的 live_state.selected_cat_ids」
+      // 所以前端送 selectedCatIds 其實沒用，先不要送 body，避免你誤以為有生效。
+      const r = await fetchJson<ApiOk | ApiErr>("/api/live/preview");
+      if (!("ok" in r) || (r as any).ok !== true)
+        throw new Error((r as any).error);
       setMsg("✅ 已推送預覽到 /display（尚未出結果）");
     } catch (e: any) {
       setMsg("預覽失敗：" + (e?.message ?? String(e)));
     }
   }
 
-async function doDraw() {
-  setMsg(""); 
-  const res = await fetch("/api/draw", {
-    method: "POST",
-    headers: {
-      "x-admin-key": process.env.NEXT_PUBLIC_ADMIN_KEY!, // 你前端那個
-    },
-  });
+  async function doDraw() {
+    setMsg("");
 
-  const json = await res.json().catch(() => ({}));
-  if (!res.ok) return setMsg(`抽籤失敗：${res.status} ${json?.error ?? ""}`);
+    if (!ADMIN_KEY) {
+      return setMsg("❌ 缺少 NEXT_PUBLIC_ADMIN_KEY（前端送不出 x-admin-key）");
+    }
 
-  setMsg("🎉 抽籤完成，已寫入 wins，並推送到 /display");
-}
+    const res = await fetch("/api/draw", {
+      method: "POST",
+      headers: {
+        "x-admin-key": ADMIN_KEY,
+      },
+    });
+
+    const json = await res.json().catch(() => ({}));
+    if (!res.ok) return setMsg(`抽籤失敗：${res.status} ${json?.error ?? ""}`);
+
+    setMsg("🎉 抽籤完成，已寫入 wins，並推送到 /display");
+  }
+
   function clearSelection() {
     setPopularSelected(null);
     setOtherSelected([]);
@@ -212,10 +226,7 @@ async function doDraw() {
             </button>
 
             <div className="ml-auto">
-              <button
-                onClick={loadCats}
-                className="text-sm underline opacity-70"
-              >
+              <button onClick={loadCats} className="text-sm underline opacity-70">
                 重新讀取貓咪清單
               </button>
             </div>
